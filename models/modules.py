@@ -14,6 +14,7 @@ def weight_init(shape, mode, fan_in, fan_out):
     if mode == 'kaiming_uniform': return np.sqrt(3 / fan_in) * (torch.rand(*shape) * 2 - 1)
     if mode == 'kaiming_normal':  return np.sqrt(1 / fan_in) * torch.randn(*shape)
     if mode == 'test' :
+        return torch.ones(shape)
         np.random.seed(10) 
         return np.sqrt(1 / fan_in) * (torch.from_numpy(np.random.randn(*shape))* 2 - 1)
     raise ValueError(f'Invalid init mode "{mode}"')
@@ -141,9 +142,14 @@ class UNetBlock(torch.nn.Module):
 
     def forward(self, x, emb):
         orig = x
+        
+        # First conv block
         x = self.conv0(F.silu(self.norm0(x)))
 
+        # Conditioning
         params = self.affine(emb).unsqueeze(2).unsqueeze(3).to(x.dtype)
+        
+        # Adaptive scaling or shift
         if self.adaptive_scale:
             scale, shift = params.chunk(chunks=2, dim=1)
             x = F.silu(torch.addcmul(shift, self.norm1(x), scale + 1))
