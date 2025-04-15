@@ -29,10 +29,10 @@ class Linear(nnx.Module):
         self.out_features = out_features
         
         init_kwargs = dict(mode=init_mode, fan_in=in_features, fan_out=out_features)
-        weight_key = self.rngs
+        weight_key = self.rngs.params()
         self.weight = nnx.Param(weight_init(weight_key, [out_features, in_features], **init_kwargs) * init_weight)
         if bias: 
-            bias_key = self.rngs
+            bias_key = self.rngs.params()
             self.bias = nnx.Param(weight_init(bias_key, [out_features], **init_kwargs) * init_bias)
         else:
             self.bias = None

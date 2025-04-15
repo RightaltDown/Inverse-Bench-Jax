@@ -1,0 +1,47 @@
+data:
+  _target_: training.mnist_dataset_jax.MNISTDatasetJax
+  root: ../data/mnist
+  train: True
+  normalize: True
+  augment: True
+  flip_probability: 0.5
+  random_crop_padding: 4
+
+model:
+  _target_: models.test_model.CNN
+
+# loss:
+#   _target_: training.nnx_loss.EDMLossJax
+#   P_mean: -1.2
+#   P_std: 1.2
+#   sigma_data: 0.5
+loss:
+  _target_: training.nnx_loss.TestLoss
+
+train:
+  lr: 0.005
+  batch_size: 128
+  num_steps: 50_000
+  warmup_steps: 0 # 1000 don't need warm-up steps for now
+  ema_decay: 0.9999
+  grad_clip: 1.0
+  ema_halflife_nimg: 10000
+  ema_rampup_ratio: 0.05
+  # tf32: True
+  resume: None
+  num_workers: 4
+  momentum: 0.9
+
+log:
+  exp_dir: exps/pretrain
+  log_every: 100
+  save_every: 1000
+  exp_name: EDM-MNIST
+  wandb: False
+  project: EDM-MNIST
+  group: training 
+
+diffusion:
+  sigma_data: 0.5
+  P_mean: -1.2
+  P_std: 1.2

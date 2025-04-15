@@ -19,6 +19,7 @@ from models.modules import (
     PositionalEmbedding as TorchPositionalEmbedding,
     FourierEmbedding as TorchFourierEmbedding
 )
+
 from models.nnx_modules_new import (
     Linear,
     Conv2d,

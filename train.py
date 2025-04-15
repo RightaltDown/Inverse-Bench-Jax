@@ -15,6 +15,7 @@ from utils.helper import create_logger, count_parameters, update_ema, unwrap_mod
 
 @hydra.main(version_base="1.3", config_path="configs/pretrain", config_name="navier-stokes")
 def main(config):
+    # Making neccessary directories + wandB (ignore for now)
     if config.train.tf32:
         torch.set_float32_matmul_precision("high")
     wandb_log = "wandb" if config.log.wandb else None
@@ -33,16 +34,24 @@ def main(config):
     os.makedirs(ckpt_dir, exist_ok=True)
     logger = create_logger(exp_dir, main_process=accelerator.is_main_process)
     logger.info(f"Experiment dir created at {exp_dir}")
+    ### 
 
     # dataset
 
+    # make Jax version of DataLoader()
     dataset = instantiate(config.data)
+    
 
+    ### 
+
+    # Do something similar for Jax? 
     batch_size = config.train.batch_size // accelerator.num_processes
     assert (
         batch_size * accelerator.num_processes == config.train.batch_size
     ), "Batch size must be divisible by num processes"
+    ### 
 
+    # Pytorch data loader, could work with Jax 
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -52,24 +61,34 @@ def main(config):
         drop_last=True,
     )
 
+    # Logging functions
     logger.info(f"Dataset loaded with {len(dataset)} samples")
     # construct loss function
     loss_fn = instantiate(config.loss)
+    ### 
 
+    # instantiating the model, need to implement Dhwarli UNet
     # build model
     net = instantiate(config.model)
 
     logger.info(f"Number of parameters: {count_parameters(net)}")
 
+    # Not too sure what the Jax equivalent of this would be 
     ema_net = copy.deepcopy(net).eval().requires_grad_(False).to(accelerator.device)
+    ### 
 
+    # warm_up steps might not be needed for now
+    # nnx.Optimizer for this one 
+    # Don't know about scheduler
     # optimizer
     warmup_steps = config.train.warmup_steps
     optimizer = torch.optim.Adam(net.parameters(), lr=config.train.lr)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lr_lambda=lambda step: min(step, warmup_steps) / warmup_steps
     )
+    ### 
 
+    # Skip this for now
     # load checkpoints
     if config.train.resume != 'None':
         checkpoint = torch.load(config.train.resume)
@@ -90,33 +109,44 @@ def main(config):
         net, dataloader, optimizer, scheduler
     )
     # net = torch.compile(net)
+    ### 
 
     training_steps = start_steps
+    
+    # Training loop!!! 
     # training loop
     for e in range(num_epochs):
         for imgs in dataloader:
             if training_steps >= config.train.num_steps:
                 break
+            # Something lke this for JAX?
             optimizer.zero_grad()
+            # Need to reimplement loss_fn with vmap
             loss = loss_fn(net, imgs)
+            # jax.jit this shit
             loss = torch.mean(loss)
+            # uhhh something to do with wandB, needed? 
             accelerator.backward(loss)
             if accelerator.sync_gradients and config.train.grad_clip > 0.0:
                 accelerator.clip_grad_norm_(
                     net.parameters(), max_norm=config.train.grad_clip
                 )
+            #use nnx.jit for train_step function and call them in there
             optimizer.step()
             scheduler.step()
 
+            # wtf is this shiz
             ema_halflife_nimg = config.train.ema_halflife_nimg
             curr_nimg = training_steps * config.train.batch_size
             ema_halflife_nimg = min(ema_halflife_nimg, curr_nimg * ema_rampup_ratio)
             ema_decay = 0.5 ** (config.train.batch_size / max(ema_halflife_nimg, 1))
 
             # update ema model
+            # ema_update with pytree? 
             raw_net = unwrap_model(net)
             update_ema(ema_net, raw_net, decay=ema_decay)
 
+            # logging stuff, again not all needed to be implemented
             accelerator.log({"loss": loss})
             if training_steps % config.log.log_every == 0:
                 logger.info(f"Step {training_steps}: loss {loss.item():.4f}")
