@@ -60,6 +60,7 @@ class Conv2d(torch.nn.Module):
         f = torch.as_tensor(resample_filter, dtype=torch.float32)
         f = f.ger(f).unsqueeze(0).unsqueeze(1)/ f.sum().square()
         self.register_buffer('resample_filter', f if up or down else None)
+        print(f"down: {down}")
 
     def forward(self, x):
         w = self.weight.to(x.dtype) if self.weight is not None else None

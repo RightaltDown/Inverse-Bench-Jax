@@ -34,6 +34,9 @@ class EDMLossJax:
             Loss value as JAX array
         """
         # Generate random noise levels (log-normal distribution)
+        
+        # jax.debug.print("Input images shape (loss): {}", .shape)
+        
         noise_rng = rngs.get('noise', None)
         rnd_normal = jax.random.normal(noise_rng, shape=(images.shape[0], 1, 1, 1), device=images.device)
         sigma = jnp.exp(rnd_normal * self.P_std + self.P_mean)

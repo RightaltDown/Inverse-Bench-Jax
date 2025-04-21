@@ -188,6 +188,8 @@ class Conv2d(nnx.Module):
         if b is not None:
             # x = jnp.add(x, b.reshape(1, -1, 1, 1))
             x = jnp.add(x, b.reshape(1, 1, 1, -1))  # Reshape bias for NHWC format
+            # x = jnp.add(x, b) 
+        
         return x
 
 class GroupNorm(nnx.Module):

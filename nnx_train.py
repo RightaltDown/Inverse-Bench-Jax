@@ -1,13 +1,15 @@
 import os
 os.environ['HYDRA_FULL_ERROR'] = '1'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION']='0.4'
 from absl import logging as absl_logging
 absl_logging.set_verbosity(absl_logging.ERROR)
-from omegaconf import OmegaConf
-import hydra
+
+
 
 import torch
-from torch.utils.data import DataLoader
+from utils.nnx_scheduler import Scheduler
 
 import jax
 import jax.numpy as jnp
@@ -15,14 +17,10 @@ import numpy as np
 import optax
 from flax import nnx
 from jax.experimental import mesh_utils
-from functools import partial
 
 import tensorflow as tf
 import tensorflow_datasets as tfds
-
 from flax import nnx
-from flax.training import train_state
-import functools
 
 from models.nnx_precond import EDMPrecond
 
@@ -77,7 +75,6 @@ def save_samples(samples, save_path, grid_size=None):
     
     print(f"Saved samples to {save_path}")
 
-# JAX data loading functions
 def create_mnist_dataset(batch_size, split='train', shuffle=True):
     ds = tfds.load('mnist', split=split, as_supervised=True)
     
@@ -94,20 +91,6 @@ def create_mnist_dataset(batch_size, split='train', shuffle=True):
     ds = ds.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
     
     return tfds.as_numpy(ds)
-
-# class TrainState(train_state.TrainState):
-#     counts: nnx.State
-#     graphdef: nnx.GraphDef
-
-# class Count(nnx.Variable[nnx.A]):
-#   pass
-
-
-# # Validation step for model evaluation
-# def eval_step(state: TrainState, batch):
-#     """Parallel validation step"""
-#     model = nnx.merge(state.graphdef, state.params, state.counts)
-#     _, aux = state.loss_fn(model, batch, is_training=False)
     
 def edm_loss_fn(rng, model, images, sigma_data=0.5, P_mean=-1.2, P_std=1.2, labels=None, augment_pipe=None):
     # Creating random noise
@@ -131,13 +114,10 @@ def edm_loss_fn(rng, model, images, sigma_data=0.5, P_mean=-1.2, P_std=1.2, labe
     # Calculate MSE loss with importance weighting
     loss = weight * ((D_yn - y) ** 2)
     return jnp.mean(loss)
-    
-    
 
-@hydra.main(version_base="1.3", config_path="configs/pretrain", config_name="mnist")
-def main(config):
-    
-    exp_dir = os.path.join(config.log.exp_dir, config.log.exp_name)
+
+def main():
+    exp_dir = os.path.join("exps/pretrain", "EDM-MNIST")
     os.makedirs(exp_dir, exist_ok=True)
     
     # create a mesh + shardings
@@ -149,24 +129,29 @@ def main(config):
     model_sharding = jax.NamedSharding(mesh, jax.sharding.PartitionSpec())
     data_sharding = jax.NamedSharding(mesh, jax.sharding.PartitionSpec('data'))
     
-    batch_size = config.train.batch_size // num_devices
+    batch_size = 128 // num_devices
     assert(
-        batch_size * num_devices == config.train.batch_size
+        batch_size * num_devices == 128
     ), "Batch size must be divisible by num processes"
     
     
     net = EDMPrecond(
         rngs=rngs,
         model_type='DhariwalUNet',
-        img_resolution=128,
+        img_resolution=32,
         img_channels=1,
         label_dim=0,
         model_channels=128,
-        channel_mult=[1, 1, 1, 2, 2],
+        channel_mult=[1, 1, 1, 1],
         attn_resolutions= [16],
         num_blocks=1,
         dropout=0.0,
     )
+    
+    scheduler = Scheduler(num_steps=200, schedule='linear', timestep='poly-7', scaling='none')
+    
+    sampler = DiffusionSampler(scheduler=scheduler)
+    
     optimizer = nnx.Optimizer(net, optax.adamw(1e-2))
     
     # replicate state
@@ -174,16 +159,10 @@ def main(config):
     state = jax.device_put(state, model_sharding)
     nnx.update((net, optimizer), state)
     
-    # sampler = DiffusionSampler(
-    #     sigma_max=config.diffusion.sigma_max,
-    #     sigma_min=config.diffusion.sigma_min,
-    #     num_steps=config.sampling.num_steps
-    # )
-    
-    
     print('model sharding')
     jax.debug.visualize_array_sharding(net.model.map_layer0.weight.value)
     
+    # nnx.display(net)
     # could potentially use nnx.shard_map here instead of jax.device_put on the images and labels
     # @partial(nnx.jit, static_argnums=(4,))
     @nnx.jit
@@ -193,7 +172,7 @@ def main(config):
                 rngs,
                 model,
                 images,
-                labels=labels,
+                labels=None,
                 augment_pipe=None   
             )
 
@@ -214,36 +193,29 @@ def main(config):
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         batch_count = 0
-        for batch in  train_dataset:
+        for (images, _) in train_dataset:
             if training_steps > 1000: break
             
             # shard data
-            images, labels = batch
-            images, labels = jax.device_put((images, labels), data_sharding)
-            
-            print(f"\n Images shape: {images.shape} \n")
-            print(f"\n Labels shape: {labels.shape} \n")
+            # images, labels = batch
+            # images = jax.random.normal(rngs.loss(), (32, 32, 32, 1))
+            images = jax.image.resize(images, (32, 32, 32, 1), 'linear')
+            images = jax.device_put(images, data_sharding)
             
             
             # train
-            loss = train_step(net, optimizer, images, labels, rngs)
+            loss = train_step(net, optimizer, images, labels=None, rngs=rngs)
             epoch_loss += loss
             batch_count += 1
             
-            # if training_steps % config.sampling.sample_every == 0:
-            #     print(f"Generating samples at step {training_steps}")
-            #     key = rngs.sampling()
+            if training_steps % 100 == 0:
+                print(f"Generating samples at step {training_steps}")
                 
-            #     samples, _ = sampler.sample(
-            #         net, 
-            #         key,
-            #         (config.sampling.num_samples, 28, 28, 1),
-            #         verbose=True
-            #     )
+                x_start = sampler.get_start(ref_shape=(32, 32, 32, 1), rngs=rngs)
+                sample = sampler.sample(model=net, x_start=x_start, rngs=rngs)                
+                sample_path = os.path.join(exp_dir, f"samples_step_{training_steps}.png")
                 
-            #     sample_path = os.path.join(exp_dir, f"samples_step_{training_steps}.png")
-                
-            #     save_samples(samples, sample_path)
+                save_samples(sample, sample_path)
             
             if epoch == 0 and batch_count == 1:
                 print('data sharding')
@@ -284,5 +256,5 @@ def main(config):
     
 
 if __name__ == "__main__":
-    tf.config.experimental.set_visible_devices([], "GPU")
+    # tf.config.experimental.set_visible_devices([], "GPU")
     main()

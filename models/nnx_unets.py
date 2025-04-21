@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 from functools import partial
 from models.nnx_modules import Linear, Conv2d, GroupNorm, PositionalEmbedding, FourierEmbedding, UNetBlock
+import sys
 
 # Functions from the second file
 def weight_init(key, shape, mode, fan_in, fan_out):
@@ -33,9 +34,9 @@ class DhariwalUNet(nnx.Module):
         augment_dim         = 0,            # Augmentation label dimensionality, 0 = no augmentation.
         
         model_channels      = 128,          # Base multiplier for the number of channels.
-        channel_mult        = [1,2,2,2],    # Per-resolution multipliers for the number of channels.
+        channel_mult        = [1,1,1,1], # Per-resolution multipliers for the number of channels.
         channel_mult_emb    = 4,            # Multiplier for the dimensionality of the embedding vector.
-        num_blocks          = 4,            # Number of residual blocks per resolution.
+        num_blocks          = 1,            # Number of residual blocks per resolution.
         attn_resolutions    = [16],         # List of resolutions with self-attention.
         dropout             = 0.10,         # Dropout probability.
         label_dropout       = 0,            # Dropout probability of class labels for classifier-free guidance.
@@ -73,6 +74,7 @@ class DhariwalUNet(nnx.Module):
 
         # Encoder
         self.enc = {}
+        self.enc_names = []
         cout = in_channels
         for level, mult in enumerate(channel_mult):
             res = img_resolution >> level
@@ -86,6 +88,7 @@ class DhariwalUNet(nnx.Module):
                     kernel=3, 
                     **init
                 )
+                self.enc_names.append(f'{res}x{res}_conv')
             else:
                 self.enc[f'{res}x{res}_down'] = UNetBlock(
                     rngs=rngs, 
@@ -94,6 +97,7 @@ class DhariwalUNet(nnx.Module):
                     down=True, 
                     **block_kwargs
                 )
+                self.enc_names.append(f'{res}x{res}_down')
             
             for idx in range(num_blocks):
                 cin = cout
@@ -105,6 +109,7 @@ class DhariwalUNet(nnx.Module):
                     attention=(res in attn_resolutions), 
                     **block_kwargs
                 )
+                self.enc_names.append(f'{res}x{res}_block{idx}')
         
         # Calculate skip channel counts for decoder
         self.enc_modules = nnx.Dict()
@@ -120,6 +125,7 @@ class DhariwalUNet(nnx.Module):
 
         # Decoder
         self.dec = {}
+        self.dec_names = []
         for level, mult in reversed(list(enumerate(channel_mult))):
             res = img_resolution >> level
             if level == len(channel_mult) - 1:
@@ -130,12 +136,14 @@ class DhariwalUNet(nnx.Module):
                     attention=True, 
                     **block_kwargs
                 )
+                self.dec_names.append(f'{res}x{res}_in0')
                 self.dec[f'{res}x{res}_in1'] = UNetBlock(
                     rngs=rngs, 
                     in_channels=cout, 
                     out_channels=cout, 
                     **block_kwargs
                 )
+                self.dec_names.append(f'{res}x{res}_in1')
             else:
                 self.dec[f'{res}x{res}_up'] = UNetBlock(
                     rngs=rngs, 
@@ -144,6 +152,7 @@ class DhariwalUNet(nnx.Module):
                     up=True, 
                     **block_kwargs
                 )
+                self.dec_names.append(f'{res}x{res}_up')
             
             for idx in range(num_blocks + 1):
                 # Get the skip connection channel count
@@ -196,19 +205,38 @@ class DhariwalUNet(nnx.Module):
 
         # Encoder
         skips = []
-        for name, block in self.enc_modules.items():
-            if isinstance(block, UNetBlock):
-                x = block(x, emb, train=train)
+        # for name, block in self.enc_modules.items():
+        #     print(name)
+        #     # if name.split('_')[-1] == 'conv':
+        #     if isinstance(block, UNetBlock):
+        #         x = block(x, emb, train=train)
+        #         print("here1")
+        #     else:
+        #         x = block(x)
+        #         print("here")
+        #     skips.append(x)
+        for name in self.enc_names:
+            module = self.enc_modules.get(name)
+            if isinstance(module, UNetBlock):
+                x = module(x, emb, train=train)
             else:
-                x = block(x)
+                x = module(x)
             skips.append(x)
 
         # Decoder
-        for name, block in self.dec_modules.items():
-            if x.shape[-1] != block.in_channels:  # Using -1 for channel dimension in NHWC
+        # for name, block in self.dec_modules.items():
+        #     if x.shape[-1] != block.in_channels:  # Using -1 for channel dimension in NHWC
+        #         skip = skips.pop()
+        #         x = jnp.concatenate([x, skip], axis=-1)  # Concatenate along channel dimension
+        #     x = block(x, emb, train=train)
+            
+        for name in self.dec_names:
+            module = self.dec_modules.get(name)
+            if x.shape[-1] != module.in_channels:  # Using -1 for channel dimension in NHWC
                 skip = skips.pop()
                 x = jnp.concatenate([x, skip], axis=-1)  # Concatenate along channel dimension
-            x = block(x, emb, train=train)
+            x = module(x, emb, train=train)
+
 
         # Output
         x = silu(self.out_norm(x))

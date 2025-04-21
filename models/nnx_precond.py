@@ -40,9 +40,11 @@ class EDMPrecond(nnx.Module):
         )
     
     # train is usually False? 
-    def __call__(self, x, sigma, class_labels=None, force_fp32=False, train=True, **model_kwargs):
+    def __call__(self, x, sigma, class_labels=None, force_fp32=False, train=False, **model_kwargs):
         # Convert inputs if needed (in PyTorch this would convert to Tensor, in JAX we ensure array type)
         # Reshape sigma to match PyTorch's reshape(-1, 1, 1, 1)
+        # nnx.display(self.model)
+        
         sigma = jnp.asarray(sigma, dtype=jnp.float32)
         sigma = sigma.reshape(-1, 1, 1, 1)
         
@@ -69,9 +71,11 @@ class EDMPrecond(nnx.Module):
             dtype = jnp.float16
         
         # Scale input and run the model
-        x_scaled = c_in * x
+        x_scaled = c_in * x    
         if dtype == jnp.float16:
             x_scaled = x_scaled.astype(dtype)
+            
+        # print(f"x_scaled: {x_scaled.shape}")
         
         F_x = self.model(
             x_scaled, 

@@ -33,7 +33,7 @@ def test_dhariwal_unet():
     """
     print("Testing DhariwalUNet implementation...")
     
-    img_resolution=  128
+    img_resolution=  32
     in_channels =  1
     out_channels = 1
     label_dim = 0
@@ -52,7 +52,8 @@ def test_dhariwal_unet():
     
     x_jax = jax.random.normal(subkeys[0], (batch_size, img_resolution, img_resolution, in_channels))
     noise_labels_jax = jax.random.normal(subkeys[1], (batch_size,))
-    class_labels_jax = jax.nn.one_hot(jax.random.randint(subkeys[2], (batch_size,), 0, label_dim), label_dim)
+    # class_labels_jax = jax.nn.one_hot(jax.random.randint(subkeys[2], (batch_size,), 0, label_dim), label_dim)
+    class_labels_jax = None
     
     # Initialize JAX model
     model_key = subkeys[3]

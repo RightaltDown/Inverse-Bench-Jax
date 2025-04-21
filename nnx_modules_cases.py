@@ -70,13 +70,13 @@ def test_conv2d():
     
     # Create test input
     
-    x = torch.randn(2, 4, 32, 32)
+    x = torch.randn(32, 1, 32, 32)
     x_jax = jnp.array(x.numpy())
     x_jax = jnp.transpose(x_jax, (0, 2, 3, 1))
     
     # default
-    torch_conv = TorchConv2d(4, 6, kernel=3, init_mode='test')
-    flax_conv = Conv2d(rngs, 4, 6, kernel=3, init_mode='test')
+    torch_conv = TorchConv2d(1, 32, kernel=3, init_mode='test')
+    flax_conv = Conv2d(rngs, 1, 32, kernel=3, init_mode='test')
     
     # Forward pass
     torch_out = torch_conv(x)
@@ -84,7 +84,7 @@ def test_conv2d():
     flax_out = jnp.transpose(flax_out, (0, 3, 1, 2))
     
     # Compare outputs
-    assert compare_tensors(torch_out, flax_out), "default"
+    assert compare_tensors(torch_out, flax_out, debug=True), "default"
     print("default passed!")
     
     # down
@@ -590,12 +590,12 @@ def nhwc_to_nchw(x):
     return jnp.transpose(x, (0, 3, 1, 2))
 
 if __name__ == "__main__":
-    test_linear_module()
+    # test_linear_module()
     test_conv2d()
-    test_group_norm()
-    test_positional_embedding()
-    test_fourier_embedding()
-    test_unet_block()
+    # test_group_norm()
+    # test_positional_embedding()
+    # test_fourier_embedding()
+    # test_unet_block()
     
     # Debuging methods
     # debug_conv2d_implementations()
