@@ -69,14 +69,15 @@ def test_conv2d():
     rngs = nnx.Rngs(0, params=1)
     
     # Create test input
+    B, C, H, W = 32, 4, 32, 32
     
-    x = torch.randn(32, 1, 32, 32)
+    x = torch.randn(B, C, H, W)
     x_jax = jnp.array(x.numpy())
     x_jax = jnp.transpose(x_jax, (0, 2, 3, 1))
     
     # default
-    torch_conv = TorchConv2d(1, 32, kernel=3, init_mode='test')
-    flax_conv = Conv2d(rngs, 1, 32, kernel=3, init_mode='test')
+    torch_conv = TorchConv2d(C, 32, kernel=3, init_mode='test')
+    flax_conv = Conv2d(rngs, C, 32, kernel=3, init_mode='test')
     
     # Forward pass
     torch_out = torch_conv(x)
@@ -530,12 +531,12 @@ def test_fourier_embedding():
 
 def test_unet_block():
     # Initialize parameters
-    batch_size = 2
-    in_channels = 32
-    out_channels = 64
+    batch_size = 32
+    in_channels = 1
+    out_channels = 1
     emb_channels = 16
-    height = 16
-    width = 16
+    height = 128
+    width = 128
     rngs = nnx.Rngs(0, params=1)
     
     # Create test inputs
@@ -591,11 +592,11 @@ def nhwc_to_nchw(x):
 
 if __name__ == "__main__":
     # test_linear_module()
-    test_conv2d()
+    # test_conv2d()
     # test_group_norm()
-    # test_positional_embedding()
+    # # test_positional_embedding()
     # test_fourier_embedding()
-    # test_unet_block()
+    test_unet_block()
     
     # Debuging methods
     # debug_conv2d_implementations()

@@ -52,7 +52,7 @@ class DiffusionSampler:
             jnp.ndarray: The computed score.
         """
         sigma = jnp.asarray(sigma, dtype=x.dtype)
-        d = model(x, sigma)
+        d = model(x, sigma, train=False)
         return (d - x) / (sigma ** 2)
     
     def _euler_step(self, i, state, model, SDE, random_seq=None):

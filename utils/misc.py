@@ -12,6 +12,55 @@ import torch
 import warnings
 from utils.helper import EasyDict
 
+import numpy as np
+import matplotlib.pyplot as plt
+
+def save_samples(samples, save_path, grid_size=None):
+    """
+    Save generated samples as a grid image.
+    
+    Args:
+        samples: JAX array of shape [batch, height, width, channels]
+        save_path: Path to save the output image
+        grid_size: Tuple of (rows, cols) for the grid layout. If None, will be automatically determined.
+    """
+    # Convert from JAX array to numpy
+    samples_np = np.array(samples)
+    
+    # Determine grid size if not provided
+    batch_size = samples_np.shape[0]
+    if grid_size is None:
+        grid_size = (int(np.sqrt(batch_size)), int(np.ceil(batch_size / int(np.sqrt(batch_size)))))
+    
+    # Create the grid
+    rows, cols = grid_size
+    fig, axes = plt.subplots(rows, cols, figsize=(2*cols, 2*rows))
+    
+    # Flatten axes if needed to make indexing consistent
+    axes = axes.flatten() if rows > 1 or cols > 1 else [axes]
+    
+    # Plot each sample
+    for i in range(batch_size):
+        if i < len(axes):
+            # For grayscale images (channels=1)
+            # Use RdYlBu for Navierstokes visualization
+            if samples_np.shape[-1] == 1:
+                # axes[i].imshow(samples_np[i, :, :, 0], cmap='RdYlBu')
+                axes[i].imshow(samples_np[i, :, :, 0], cmap='gray')
+            else:
+                # For RGB images
+                axes[i].imshow(samples_np[i])
+            
+            axes[i].axis('off')
+    
+    # Hide any unused subplots
+    for i in range(batch_size, len(axes)):
+        axes[i].axis('off')
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    plt.close(fig)
+
 #----------------------------------------------------------------------------
 # Cached construction of constant tensors. Avoids CPU=>GPU copy when the
 # same constant is used multiple times.

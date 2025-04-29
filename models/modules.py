@@ -15,8 +15,6 @@ def weight_init(shape, mode, fan_in, fan_out):
     if mode == 'kaiming_normal':  return np.sqrt(1 / fan_in) * torch.randn(*shape)
     if mode == 'test' :
         return torch.ones(shape)
-        np.random.seed(10) 
-        return np.sqrt(1 / fan_in) * (torch.from_numpy(np.random.randn(*shape))* 2 - 1)
     raise ValueError(f'Invalid init mode "{mode}"')
 
 #----------------------------------------------------------------------------
@@ -60,7 +58,6 @@ class Conv2d(torch.nn.Module):
         f = torch.as_tensor(resample_filter, dtype=torch.float32)
         f = f.ger(f).unsqueeze(0).unsqueeze(1)/ f.sum().square()
         self.register_buffer('resample_filter', f if up or down else None)
-        print(f"down: {down}")
 
     def forward(self, x):
         w = self.weight.to(x.dtype) if self.weight is not None else None
@@ -94,6 +91,7 @@ class GroupNorm(torch.nn.Module):
     def __init__(self, num_channels, num_groups=32, min_channels_per_group=4, eps=1e-5):
         super().__init__()
         self.num_groups = min(num_groups, num_channels // min_channels_per_group)
+        self.num_groups = max(1, self.num_groups)
         self.eps = eps
         self.weight = torch.nn.Parameter(torch.ones(num_channels))
         self.bias = torch.nn.Parameter(torch.zeros(num_channels))
@@ -135,7 +133,6 @@ class UNetBlock(torch.nn.Module):
         if out_channels != in_channels or up or down:
             kernel = 1 if resample_proj or out_channels!= in_channels else 0
             self.skip = Conv2d(in_channels=in_channels, out_channels=out_channels, kernel=kernel, up=up, down=down, resample_filter=resample_filter, **init)
-
         if self.num_heads:
             self.norm2 = GroupNorm(num_channels=out_channels, eps=eps)
             self.qkv = Conv2d(in_channels=out_channels, out_channels=out_channels*3, kernel=1, **(init_attn if init_attn is not None else init))

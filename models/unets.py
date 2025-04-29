@@ -202,7 +202,6 @@ class DhariwalUNet(torch.nn.Module):
                 cout = model_channels * mult
                 self.enc[f'{res}x{res}_block{idx}'] = UNetBlock(in_channels=cin, out_channels=cout, attention=(res in attn_resolutions), **block_kwargs)
         skips = [block.out_channels for block in self.enc.values()]
-
         # Decoder.
         self.dec = torch.nn.ModuleDict()
         for level, mult in reversed(list(enumerate(channel_mult))):
@@ -216,8 +215,13 @@ class DhariwalUNet(torch.nn.Module):
                 cin = cout + skips.pop()
                 cout = model_channels * mult
                 self.dec[f'{res}x{res}_block{idx}'] = UNetBlock(in_channels=cin, out_channels=cout, attention=(res in attn_resolutions), **block_kwargs)
+        
         self.out_norm = GroupNorm(num_channels=cout)
         self.out_conv = Conv2d(in_channels=cout, out_channels=out_channels, kernel=3, **init_zero)
+        # print(f"TORCH, encoder: {[name for name in self.enc.keys()]}")
+        # print(f"TORCH, decoder: {[name for name in self.dec.keys()]}")
+        
+        # assert 1 == 0
 
     def forward(self, x, noise_labels, class_labels, augment_labels=None):
         # Mapping.
@@ -238,7 +242,7 @@ class DhariwalUNet(torch.nn.Module):
         for block in self.enc.values():
             x = block(x, emb) if isinstance(block, UNetBlock) else block(x)
             skips.append(x)
-
+        
         # Decoder.
         for block in self.dec.values():
             if x.shape[1] != block.in_channels:

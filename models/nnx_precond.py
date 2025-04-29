@@ -40,15 +40,10 @@ class EDMPrecond(nnx.Module):
         )
     
     # train is usually False? 
-    def __call__(self, x, sigma, class_labels=None, force_fp32=False, train=False, **model_kwargs):
-        # Convert inputs if needed (in PyTorch this would convert to Tensor, in JAX we ensure array type)
-        # Reshape sigma to match PyTorch's reshape(-1, 1, 1, 1)
-        # nnx.display(self.model)
-        
+    def __call__(self, x, sigma, class_labels=None, force_fp32=False, train=True, **model_kwargs):    
         sigma = jnp.asarray(sigma, dtype=jnp.float32)
-        sigma = sigma.reshape(-1, 1, 1, 1)
+        # sigma = sigma.reshape(-1, 1, 1, 1) ? do i need to do this
         
-        # Handle class labels - similar to PyTorch implementation
         if self.label_dim == 0:
             class_labels = None
         elif class_labels is None:

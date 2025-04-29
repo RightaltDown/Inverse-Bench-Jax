@@ -2,9 +2,7 @@ from flax import nnx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from functools import partial
 from models.nnx_modules import Linear, Conv2d, GroupNorm, PositionalEmbedding, FourierEmbedding, UNetBlock
-import sys
 
 # Functions from the second file
 def weight_init(key, shape, mode, fan_in, fan_out):
@@ -33,44 +31,27 @@ class DhariwalUNet(nnx.Module):
         label_dim           = 0,            # Number of class labels, 0 = unconditional.
         augment_dim         = 0,            # Augmentation label dimensionality, 0 = no augmentation.
         
-        model_channels      = 128,          # Base multiplier for the number of channels.
-        channel_mult        = [1,1,1,1], # Per-resolution multipliers for the number of channels.
+        model_channels      = 192,          # Base multiplier for the number of channels.
+        channel_mult        = [1,2,3,4], # Per-resolution multipliers for the number of channels.
         channel_mult_emb    = 4,            # Multiplier for the dimensionality of the embedding vector.
-        num_blocks          = 1,            # Number of residual blocks per resolution.
-        attn_resolutions    = [16],         # List of resolutions with self-attention.
+        num_blocks          = 3,            # Number of residual blocks per resolution.
+        attn_resolutions    = [32, 16, 8],         # List of resolutions with self-attention.
         dropout             = 0.10,         # Dropout probability.
         label_dropout       = 0,            # Dropout probability of class labels for classifier-free guidance.
-        
-        embedding_type      = 'positional', # Timestep embedding type: 'positional' for DDPM++, 'fourier' for NCSN++.
-        channel_mult_noise  = 1,            # Timestep embedding size: 1 for DDPM++, 2 for NCSN++.
-        encoder_type        = 'standard',   # Encoder architecture: 'standard' for DDPM++, 'residual' for NCSN++.
-        decoder_type        = 'standard',   # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
-        resample_filter     = [1,1],        # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
-    ):
-        assert embedding_type in ['fourier', 'positional']
-        assert encoder_type in ['standard', 'skip', 'residual']
-        assert decoder_type in ['standard', 'skip']
-        
+    ):        
         super().__init__()
         self.label_dropout = label_dropout
         emb_channels = model_channels * channel_mult_emb
-        noise_channels = model_channels * channel_mult_noise
-        init = dict(init_mode='xavier_uniform')
-        init_zero = dict(init_mode='xavier_uniform', init_weight=1e-5)
-        init_attn = dict(init_mode='xavier_uniform', init_weight=np.sqrt(0.2))
-        block_kwargs = dict(
-            emb_channels=emb_channels, num_heads=1, dropout=dropout, skip_scale=np.sqrt(0.5), eps=1e-6,
-            resample_filter=resample_filter, resample_proj=True, adaptive_scale=False,
-            init=init, init_zero=init_zero, init_attn=init_attn,
-        )
-        
+        init = dict(init_mode='kaiming_uniform', init_weight=jnp.sqrt(1/3), init_bias=jnp.sqrt(1/3))
+        init_zero = dict(init_mode='kaiming_uniform', init_weight=0, init_bias=0)
+        block_kwargs = dict(emb_channels=emb_channels, channels_per_head=64, dropout=dropout, init=init, init_zero=init_zero)
 
         # Mapping network
-        self.map_noise = PositionalEmbedding(num_channels=model_channels, endpoint=True) if embedding_type == 'positional' else FourierEmbedding(num_channels=noise_channels)
-        self.map_label = Linear(rngs=rngs, in_features=label_dim, out_features=noise_channels, **init) if label_dim else None
-        self.map_augment = Linear(rngs=rngs, in_features=augment_dim, out_features=noise_channels, bias=False, **init) if augment_dim else None
-        self.map_layer0 = Linear(rngs=rngs, in_features=noise_channels, out_features=emb_channels, **init)
+        self.map_noise = PositionalEmbedding(num_channels=model_channels)
+        self.map_augment = Linear(rngs=rngs, in_features=augment_dim, out_features=model_channels, bias=False, **init_zero) if augment_dim else None
+        self.map_layer0 = Linear(rngs=rngs, in_features=model_channels, out_features=emb_channels, **init)
         self.map_layer1 = Linear(rngs=rngs, in_features=emb_channels, out_features=emb_channels, **init)
+        self.map_label = Linear(rngs=rngs, in_features=label_dim, out_features=emb_channels, bias=False, init_mode='kaiming_normal', init_weight=np.sqrt(label_dim)) if label_dim else None
 
         # Encoder
         self.enc = {}
@@ -113,16 +94,11 @@ class DhariwalUNet(nnx.Module):
         
         # Calculate skip channel counts for decoder
         self.enc_modules = nnx.Dict()
-        for key, module in self.enc.items():
-            self.enc_modules[key] = module
-            
-        # Calculate skip connections for decoder
-        # Note: This is slightly different than the PyTorch implementation
-        # since we need to explicitly keep track of the skip connections
         self.skip_channel_counts = []
         for key, module in self.enc.items():
+            self.enc_modules[key] = module
             self.skip_channel_counts.append(module.out_channels)
-
+        
         # Decoder
         self.dec = {}
         self.dec_names = []
@@ -144,7 +120,7 @@ class DhariwalUNet(nnx.Module):
                     **block_kwargs
                 )
                 self.dec_names.append(f'{res}x{res}_in1')
-            else:
+            else:        
                 self.dec[f'{res}x{res}_up'] = UNetBlock(
                     rngs=rngs, 
                     in_channels=cout, 
@@ -166,7 +142,7 @@ class DhariwalUNet(nnx.Module):
                     attention=(res in attn_resolutions), 
                     **block_kwargs
                 )
-        
+                self.dec_names.append(f'{res}x{res}_block{idx}')
         self.dec_modules = nnx.Dict()
         for key, module in self.dec.items():
             self.dec_modules[key] = module
@@ -180,6 +156,10 @@ class DhariwalUNet(nnx.Module):
             kernel=3, 
             **init_zero
         )
+        # print(f"Jax encoder: {[name for name in self.enc_names]}")
+        # print(f"Jax decoder: {[name for name in self.dec_names]}")
+        
+        # assert 1 == 0
 
     def __call__(self, x, noise_labels, class_labels, augment_labels=None, train=True):
         # Mapping network
@@ -205,16 +185,6 @@ class DhariwalUNet(nnx.Module):
 
         # Encoder
         skips = []
-        # for name, block in self.enc_modules.items():
-        #     print(name)
-        #     # if name.split('_')[-1] == 'conv':
-        #     if isinstance(block, UNetBlock):
-        #         x = block(x, emb, train=train)
-        #         print("here1")
-        #     else:
-        #         x = block(x)
-        #         print("here")
-        #     skips.append(x)
         for name in self.enc_names:
             module = self.enc_modules.get(name)
             if isinstance(module, UNetBlock):
@@ -222,21 +192,14 @@ class DhariwalUNet(nnx.Module):
             else:
                 x = module(x)
             skips.append(x)
-
+        
         # Decoder
-        # for name, block in self.dec_modules.items():
-        #     if x.shape[-1] != block.in_channels:  # Using -1 for channel dimension in NHWC
-        #         skip = skips.pop()
-        #         x = jnp.concatenate([x, skip], axis=-1)  # Concatenate along channel dimension
-        #     x = block(x, emb, train=train)
-            
         for name in self.dec_names:
             module = self.dec_modules.get(name)
             if x.shape[-1] != module.in_channels:  # Using -1 for channel dimension in NHWC
                 skip = skips.pop()
                 x = jnp.concatenate([x, skip], axis=-1)  # Concatenate along channel dimension
             x = module(x, emb, train=train)
-
 
         # Output
         x = silu(self.out_norm(x))
