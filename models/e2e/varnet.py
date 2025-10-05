@@ -278,7 +278,9 @@ class VarNet(nn.Module):
             kspace_pred = cascade(kspace_pred, masked_kspace, mask, sens_maps)
 
         # return fastmri.ifft2c(kspace_pred)
-        return fastmri.rss(fastmri.complex_abs(fastmri.ifft2c(kspace_pred)), dim=1).unsqueeze(1)
+        return fastmri.rss(
+            fastmri.complex_abs(fastmri.ifft2c(kspace_pred)), dim=1
+        ).unsqueeze(1)
 
 
 class VarNetBlock(nn.Module):

@@ -205,7 +205,15 @@ class ResidualUNet(nn.Module):
 
     def forward(self, masked_kspace: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         recon_complex = MultiCoilMRI.ifft(torch.view_as_complex(masked_kspace))
-        recon_rss = recon_complex.type(torch.complex128).abs().float().square().sum(dim=1).sqrt().unsqueeze(1)
+        recon_rss = (
+            recon_complex.type(torch.complex128)
+            .abs()
+            .float()
+            .square()
+            .sum(dim=1)
+            .sqrt()
+            .unsqueeze(1)
+        )
         gn = GaussianNormalize()
         recon_rss = gn.input(recon_rss)
         return gn.output(recon_rss + self.net(recon_rss))

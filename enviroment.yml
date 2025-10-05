@@ -1,0 +1,8 @@
+name: jaxDM3_py310
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - jaxlib[build=*cuda*]
+  - jax
+prefix: /home/bingliang/miniconda3/envs/jaxDM3_py310

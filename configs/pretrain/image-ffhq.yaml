@@ -1,7 +1,0 @@
-name: image-ffhq
-model:
-  _target_: models.precond.EDMPrecond
-  model_type: SongUNet
-  img_resolution: 64
-  img_channels: 3
-  augment_dim: 9

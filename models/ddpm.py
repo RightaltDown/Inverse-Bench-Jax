@@ -7,8 +7,8 @@ import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .fp16_util import convert_module_to_f16, convert_module_to_f32
-from .nn import (
+from models.fp16_util import convert_module_to_f16, convert_module_to_f32
+from models.nn import (
     checkpoint,
     conv_nd,
     linear,
@@ -20,6 +20,7 @@ from .nn import (
 
 
 NUM_CLASSES = 1000
+
 
 def create_model(
     image_size,
@@ -38,7 +39,7 @@ def create_model(
     resblock_updown=False,
     use_fp16=False,
     use_new_attention_order=False,
-    model_path='',
+    model_path="",
 ):
     if channel_mult == "":
         if image_size == 512:
@@ -63,7 +64,7 @@ def create_model(
     else:
         raise NotImplementedError
 
-    model= UNetModel(
+    model = UNetModel(
         image_size=image_size,
         in_channels=3,
         model_channels=num_channels,
@@ -84,10 +85,11 @@ def create_model(
     )
 
     try:
-        model.load_state_dict(th.load(model_path, map_location='cpu'))
+        model.load_state_dict(th.load(model_path, map_location="cpu"))
     except Exception as e:
         print(f"Got exception: {e} / Randomly initialize")
     return model
+
 
 class AttentionPool2d(nn.Module):
     """
@@ -103,7 +105,7 @@ class AttentionPool2d(nn.Module):
     ):
         super().__init__()
         self.positional_embedding = nn.Parameter(
-            th.randn(embed_dim, spacial_dim ** 2 + 1) / embed_dim ** 0.5
+            th.randn(embed_dim, spacial_dim**2 + 1) / embed_dim**0.5
         )
         self.qkv_proj = conv_nd(1, embed_dim, 3 * embed_dim, 1)
         self.c_proj = conv_nd(1, embed_dim, output_dim or embed_dim, 1)
@@ -391,7 +393,7 @@ def count_flops_attn(model, _x, y):
     # We perform two matmuls with the same number of ops.
     # The first computes the weight matrix, the second computes
     # the combination of the value vectors.
-    matmul_ops = 2 * b * (num_spatial ** 2) * c
+    matmul_ops = 2 * b * (num_spatial**2) * c
     model.total_ops += th.DoubleTensor([matmul_ops])
 
 

@@ -4,7 +4,7 @@ from tempfile import gettempdir
 
 tempdir = gettempdir()
 for i in listdir(tempdir):
-    if i.startswith('devito-'):
+    if i.startswith("devito-"):
         try:
             target = path.join(tempdir, i)
             rmtree(target)

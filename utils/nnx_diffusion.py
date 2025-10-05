@@ -1,15 +1,15 @@
-from functools import partial
 import jax
 import jax.numpy as jnp
-from flax import nnx
 from tqdm.auto import trange
+from flax import nnx
+
 
 class DiffusionSampler:
     """
     Diffusion sampler for reverse SDE or PF-ODE (JAX/NNX implementation)
     """
 
-    def __init__(self, scheduler, solver='euler'):
+    def __init__(self, scheduler, solver="euler"):
         """
         Initializes the diffusion sampler with the given scheduler and solver.
 
@@ -34,7 +34,7 @@ class DiffusionSampler:
         Returns:
             jnp.ndarray: The final sampled state.
         """
-        if self.solver == 'euler':
+        if self.solver == "euler":
             return self._euler(model, x_start, rngs, SDE, verbose)
         else:
             raise NotImplementedError
@@ -51,32 +51,42 @@ class DiffusionSampler:
         Returns:
             jnp.ndarray: The computed score.
         """
-        sigma = jnp.asarray(sigma, dtype=x.dtype)
-        d = model(x, sigma, train=False)
-        return (d - x) / (sigma ** 2)
-    
+        # sigma = jnp.asarray(sigma, dtype=x.dtype)
+        d = model(
+            x, sigma, train=False, rngs=nnx.Rngs(dropout=jax.random.PRNGKey(0))
+        )  # model handles sigma broadcasting
+        sigma = jnp.asarray(sigma, dtype=x.dtype).reshape(
+            -1, 1, 1, 1
+        )  # reshape for broadcasting for final score calculation
+        return (d - x) / (sigma**2)
+
     def _euler_step(self, i, state, model, SDE, random_seq=None):
         """
         Single Euler integration step.
-        
+
         Parameters:
             i (int): Current step index.
             state (jnp.ndarray): Current state.
             model: Diffusion model.
             SDE (bool): Whether to add stochastic noise.
             random_seq (jnp.ndarray, optional): Pre-generated random noise sequence.
-            
+
         Returns:
             jnp.ndarray: Updated state.
         """
         x = state
         sigma = self.scheduler.sigma_steps[i]
-        factor = self.scheduler.factor_steps[i]
-        scaling_factor = self.scheduler.scaling_factor[i]
-        
+        factor = jnp.asarray(self.scheduler.factor_steps[i]).reshape(-1, 1, 1, 1)
+        scaling_factor = jnp.asarray(self.scheduler.scaling_factor[i]).reshape(
+            -1, 1, 1, 1
+        )
+
         # Calculate score
-        score = self.score(model, x / self.scheduler.scaling_steps[i], sigma) / self.scheduler.scaling_steps[i]
-        
+        score = (
+            self.score(model, x / self.scheduler.scaling_steps[i], sigma)
+            / scaling_factor
+        )
+
         # Update state
         if SDE:
             if random_seq is not None:
@@ -84,42 +94,49 @@ class DiffusionSampler:
                 epsilon = random_seq[i]
             else:
                 # This would typically be moved outside for pure functional implementation
-                epsilon = jax.random.normal(jax.random.PRNGKey(i), shape=x.shape, dtype=x.dtype)
-            
+                epsilon = jax.random.normal(
+                    jax.random.PRNGKey(i), shape=x.shape, dtype=x.dtype
+                ).reshape(-1, 1, 1, 1)
             x = x * scaling_factor + factor * score + jnp.sqrt(factor) * epsilon
         else:
             x = x * scaling_factor + factor * score * 0.5
-            
+
         return x
-    
+
     def _euler(self, model, x_start, rngs, SDE=False, verbose=False):
         """
         Euler's method for sampling from the diffusion process.
-        
+
         This implementation offers both a standard loop with tqdm for visualization
         and a pure functional implementation using jax.lax.scan.
         """
         num_steps = self.scheduler.num_steps
-        
+
         # Pre-generate all noise if using SDE for reproducibility
         random_seq = None
         if SDE and rngs is not None:
             # Generate all random noise upfront
             subkeys = jax.random.split(rngs.sampling(), num_steps)
-            random_seq = jax.vmap(lambda k: jax.random.normal(k, shape=x_start.shape, dtype=x_start.dtype))(subkeys)
-        
+            random_seq = jax.vmap(
+                lambda k: jax.random.normal(k, shape=x_start.shape, dtype=x_start.dtype)
+            )(subkeys)
+
         # Use tqdm for progress tracking if verbose
         if verbose:
             x = x_start
             for i in trange(num_steps):
-                x = self._euler_step(i, x, model, SDE, random_seq[i] if random_seq is not None else None)
+                x = self._euler_step(
+                    i, x, model, SDE, random_seq[i] if random_seq is not None else None
+                )
             return x
         else:
             # Pure functional implementation using scan
             def scan_step(x, i):
-                new_x = self._euler_step(i, x, model, SDE, random_seq[i] if random_seq is not None else None)
+                new_x = self._euler_step(
+                    i, x, model, SDE, random_seq[i] if random_seq is not None else None
+                )
                 return new_x, None
-            
+
             final_x, _ = jax.lax.scan(scan_step, x_start, jnp.arange(num_steps))
             return final_x
 
@@ -135,4 +152,7 @@ class DiffusionSampler:
         Returns:
             jnp.ndarray: Initial random state.
         """
-        return jax.random.normal(rngs.sampling(), shape=ref_shape, dtype=dtype) * self.scheduler.sigma_max
+
+        return jax.random.normal(
+            rngs.sampling(), shape=ref_shape, dtype=dtype
+        ) * jnp.asarray(self.scheduler.sigma_max, dtype=dtype).reshape(-1, 1, 1, 1)

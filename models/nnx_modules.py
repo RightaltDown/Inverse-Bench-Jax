@@ -3,105 +3,149 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
+
 def weight_init(key, shape, mode, fan_in, fan_out):
-    if mode == 'xavier_uniform': return np.sqrt(6 / (fan_in + fan_out)) * (jax.random.uniform(key, shape) * 2 - 1)
-    if mode == 'xavier_normal':  return np.sqrt(2 / (fan_in + fan_out)) * jax.random.normal(key, shape)
-    if mode == 'kaiming_uniform': return np.sqrt(3 / fan_in) * (jax.random.uniform(key, shape) * 2 - 1)
-    if mode == 'kaiming_normal':  return np.sqrt(1 / fan_in) * jax.random.normal(key, shape)
-    if mode == 'test': return jnp.ones(shape)
+    if mode == "xavier_uniform":
+        return np.sqrt(6 / (fan_in + fan_out)) * (
+            jax.random.uniform(key, shape) * 2 - 1
+        )
+    if mode == "xavier_normal":
+        return np.sqrt(2 / (fan_in + fan_out)) * jax.random.normal(key, shape)
+    if mode == "kaiming_uniform":
+        return np.sqrt(3 / fan_in) * (jax.random.uniform(key, shape) * 2 - 1)
+    if mode == "kaiming_normal":
+        return np.sqrt(1 / fan_in) * jax.random.normal(key, shape)
+    if mode == "test":
+        return jnp.ones(shape)
     raise ValueError(f'Invalid init mode "{mode}"')
 
+
 class Linear(nnx.Module):
-    def __init__(self, rngs, in_features, out_features, bias=True, init_mode='kaiming_normal', init_weight=1, init_bias=0):
+    def __init__(
+        self,
+        rngs,
+        in_features,
+        out_features,
+        bias=True,
+        init_mode="test",
+        init_weight=1,
+        init_bias=0,
+    ):
         super().__init__()
-        
+
         self.in_features = in_features
         self.out_features = out_features
-        
+
         # Split RNG key for weight and bias
-        if bias:
-            weight_key, bias_key = jax.random.split(rngs.params())
-        else:
-            weight_key = rngs.params()
-        
+        kernel_key, bias_key = jax.random.split(rngs.params())
+
         init_kwargs = dict(mode=init_mode, fan_in=in_features, fan_out=out_features)
-        self.weight = nnx.Param(weight_init(weight_key, [out_features, in_features], **init_kwargs) * init_weight)
-        if bias:
-            self.bias = nnx.Param(weight_init(bias_key, [out_features], **init_kwargs) * init_bias)
-        else:
-            self.bias = None
-    
+        self.weight = nnx.Param(
+            weight_init(kernel_key, [out_features, in_features], **init_kwargs)
+            * init_weight
+        )
+        self.bias = (
+            nnx.Param(weight_init(bias_key, [out_features], **init_kwargs) * init_bias)
+            if bias
+            else None
+        )
+
     def __call__(self, x):
-        x = jnp.matmul(x, self.weight.value.transpose())
+        x = x @ self.weight.value.T
         if self.bias is not None:
-            x += jnp.reshape(self.bias.value, (1,) * (x.ndim - 1) + (-1,))
+            x += self.bias.value
         return x
+
 
 class Conv2d(nnx.Module):
     """2D convolution layer with optional up/downsampling."""
-    
-    def __init__(self, rngs,
-        in_channels, out_channels, kernel, bias=True, up=False, down=False,
-        resample_filter=[1,1], fused_resample=False, init_mode='kaiming_normal', init_weight=1, init_bias=0
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel,
+        bias=True,
+        up=False,
+        down=False,
+        resample_filter=[1, 1],
+        fused_resample=False,
+        init_mode="kaiming_normal",
+        init_weight=1,
+        init_bias=0,
+        *,
+        rngs: nnx.Rngs,
     ):
-        
         assert not (up and down), "Cannot upsample and downsample simultaneously"
         super().__init__()
-        
+
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.up = up
         self.down = down
         self.fused_resample = fused_resample
-        
+
         # Split RNG key for weight and bias if needed
         if kernel:
             if bias:
                 weight_key, bias_key = jax.random.split(rngs.params())
             else:
                 weight_key = rngs.params()
-            
+
             init_kwargs = dict(
-                mode=init_mode, 
-                fan_in=in_channels*kernel*kernel, 
-                fan_out=out_channels*kernel*kernel
+                mode=init_mode,
+                fan_in=in_channels * kernel * kernel,
+                fan_out=out_channels * kernel * kernel,
             )
-            
+
             # Create weight in HWIO format
-            self.weight = nnx.Param(weight_init(weight_key, [kernel, kernel, in_channels, out_channels], **init_kwargs) * init_weight)
+            self.weight = nnx.Param(
+                weight_init(
+                    weight_key,
+                    [kernel, kernel, in_channels, out_channels],
+                    **init_kwargs,
+                )
+                * init_weight
+            )
             if bias:
-                self.bias = nnx.Param(weight_init(bias_key, [out_channels], **init_kwargs) * init_bias)
+                self.bias = nnx.Param(
+                    weight_init(bias_key, [out_channels], **init_kwargs) * init_bias
+                )
             else:
                 self.bias = None
         else:
             self.weight = None
             self.bias = None
-        
+
         # Create resample filter in HWIO format
         if up or down:
             f = jnp.array(resample_filter, dtype=jnp.float32)
             f_outer = jnp.outer(f, f)
             f_reshaped = f_outer.reshape(f_outer.shape[0], f_outer.shape[1], 1, 1)
             self.resample_filter = nnx.Param(
-                    f_reshaped / (jnp.sum(f) ** 2), 
-                    trainable=False
+                f_reshaped / (jnp.sum(f) ** 2), trainable=False
             )
         else:
             self.resample_filter = None
-        
-    
+
     def __call__(self, x):
         # Get parameters
         w = self.weight.value.astype(x.dtype) if self.weight is not None else None
         b = self.bias.value.astype(x.dtype) if self.bias is not None else None
-        f = self.resample_filter.value.astype(x.dtype) if self.resample_filter is not None else None
-        
+        f = (
+            self.resample_filter.value.astype(x.dtype)
+            if self.resample_filter is not None
+            else None
+        )
+
         # Calculate padding
         # w_pad = w.shape[-1] // 2 if w is not None else 0
         # f_pad = (f.shape[-1] - 1) // 2 if f is not None else 0
-        w_pad = w.shape[0] // 2 if w is not None else 0  # Using first dimension for HWIO format
+        w_pad = (
+            w.shape[0] // 2 if w is not None else 0
+        )  # Using first dimension for HWIO format
         f_pad = (f.shape[0] - 1) // 2 if f is not None else 0
-        
+
         # Handle different convolution cases
         if self.fused_resample and self.up and w is not None:
             # Fused upsampling + convolution
@@ -109,95 +153,113 @@ class Conv2d(nnx.Module):
             # f_up = jnp.tile(f * 4, (self.in_channels, 1, 1, 1))
             f_up = jnp.tile(f * 4, (1, 1, 1, self.in_channels))  # HWIO format
             x = jax.lax.conv_general_dilated(
-                x, 
+                x,
                 f_up,
                 window_strides=(1, 1),
                 padding=[(max(f_pad - w_pad + 1, 1), max(f_pad - w_pad + 1, 1))] * 2,
                 lhs_dilation=(2, 2),
                 rhs_dilation=(1, 1),
                 feature_group_count=self.in_channels,
-                dimension_numbers=('NHWC', 'HWIO', 'NHWC')
+                dimension_numbers=("NHWC", "HWIO", "NHWC"),
             )
             x = jax.lax.conv_general_dilated(
-                x, w, 
-                window_strides=(1, 1), 
+                x,
+                w,
+                window_strides=(1, 1),
                 padding=[(max(w_pad - f_pad, 0), max(w_pad - f_pad, 0))] * 2,
-                dimension_numbers=('NHWC', 'HWIO', 'NHWC')
+                dimension_numbers=("NHWC", "HWIO", "NHWC"),
             )
-            
+
         elif self.fused_resample and self.down and w is not None:
             # Fused convolution + downsampling
             # print("Fused convolution + downsampling")
             x = jax.lax.conv_general_dilated(
-                x, w, 
-                window_strides=(1, 1), 
+                x,
+                w,
+                window_strides=(1, 1),
                 padding=[(w_pad + f_pad, w_pad + f_pad)] * 2,
-                dimension_numbers=('NHWC', 'HWIO', 'NHWC')
+                dimension_numbers=("NHWC", "HWIO", "NHWC"),
             )
             # f_down = jnp.tile(f, (self.out_channels, 1, 1, 1))
-            f_down = jnp.tile(f, (1, 1, 1, self.out_channels))  # [H, W, out_channels, 1]
+            f_down = jnp.tile(
+                f, (1, 1, 1, self.out_channels)
+            )  # [H, W, out_channels, 1]
             x = jax.lax.conv_general_dilated(
-                x, f_down, 
-                window_strides=(2, 2), 
+                x,
+                f_down,
+                window_strides=(2, 2),
                 padding=[(0, 0)] * 2,
-                dimension_numbers=('NHWC', 'HWIO', 'NHWC'),
-                feature_group_count=self.out_channels
+                dimension_numbers=("NHWC", "HWIO", "NHWC"),
+                feature_group_count=self.out_channels,
             )
-            
+
         else:
             # Handle separate operations
             # print("Handle separate operations")
             if self.up:
                 # print("self.up")
                 # f_up = jnp.tile(f * 4, (self.in_channels, 1, 1, 1))
-                f_up = jnp.tile(f * 4, (1, 1, 1,self.in_channels))  # HWIO format
+                f_up = jnp.tile(f * 4, (1, 1, 1, self.in_channels))  # HWIO format
                 x = jax.lax.conv_general_dilated(
-                    x, 
+                    x,
                     f_up,
                     window_strides=(1, 1),
                     padding=[(f_pad + 1, f_pad + 1)] * 2,
                     lhs_dilation=(2, 2),
                     rhs_dilation=(1, 1),
                     feature_group_count=self.in_channels,
-                    dimension_numbers=('NHWC', 'HWIO', 'NHWC')
+                    dimension_numbers=("NHWC", "HWIO", "NHWC"),
                 )
-                
+
             if self.down:
                 # print("self.down")
                 # f_down = jnp.tile(f, (self.in_channels, 1, 1, 1))
                 f_down = jnp.tile(f, (1, 1, 1, self.in_channels))  # HWIO format
                 x = jax.lax.conv_general_dilated(
-                    x, f_down, 
-                    window_strides=(2, 2), 
+                    x,
+                    f_down,
+                    window_strides=(2, 2),
                     padding=[(f_pad, f_pad)] * 2,
-                    dimension_numbers=('NHWC', 'HWIO', 'NHWC'),
-                    feature_group_count=self.in_channels
+                    dimension_numbers=("NHWC", "HWIO", "NHWC"),
+                    feature_group_count=self.in_channels,
                 )
-                
+
             if w is not None:
                 # print("w")
                 x = jax.lax.conv_general_dilated(
-                    x, w, 
-                    window_strides=(1, 1), 
+                    x,
+                    w,
+                    window_strides=(1, 1),
                     padding=[(w_pad, w_pad)] * 2,
-                    dimension_numbers=('NHWC', 'HWIO', 'NHWC')
+                    dimension_numbers=("NHWC", "HWIO", "NHWC"),
                 )
-        
+
         # Add bias if needed
         if b is not None:
             # x = jnp.add(x, b.reshape(1, -1, 1, 1))
             x = jnp.add(x, b.reshape(1, 1, 1, -1))  # Reshape bias for NHWC format
-            # x = jnp.add(x, b) 
-        
+            # x = jnp.add(x, b)
+
         return x
 
+
 class GroupNorm(nnx.Module):
-    def __init__(self, rngs, num_channels, num_groups=32, min_channels_per_group=4, eps=1e-5):
+    def __init__(
+        self,
+        num_channels,
+        num_groups=32,
+        min_channels_per_group=4,
+        eps=1e-5,
+        *,
+        rngs: nnx.Rngs,
+    ):
         super().__init__()
         self.num_channels = num_channels
-        self.num_groups = max(1, min(num_groups, num_channels // min_channels_per_group))
+        self.num_groups = max(
+            1, min(num_groups, num_channels // min_channels_per_group)
+        )
         self.eps = eps
-        
+
         # Create the internal GroupNorm module
         self.norm = nnx.GroupNorm(
             num_features=num_channels,
@@ -205,49 +267,113 @@ class GroupNorm(nnx.Module):
             epsilon=eps,
             use_bias=True,
             use_scale=True,
-            rngs=rngs
+            rngs=rngs,
         )
-    
+
     def __call__(self, x):
         return self.norm(x)
-        
+
+
 class UNetBlock(nnx.Module):
-    def __init__(self, rngs,
-        in_channels, out_channels, emb_channels, up=False, down=False, attention=False,
-        num_heads=None, channels_per_head=64, dropout=0, skip_scale=1, eps=1e-5,
-        resample_filter=[1,1], resample_proj=False, adaptive_scale=True,
-        init=dict(), init_zero=dict(init_weight=0), init_attn=None,
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        emb_channels,
+        up=False,
+        down=False,
+        attention=False,
+        num_heads=None,
+        channels_per_head=64,
+        dropout=0,
+        skip_scale=1,
+        eps=1e-5,
+        resample_filter=[1, 1],
+        resample_proj=False,
+        adaptive_scale=True,
+        init=dict(),
+        init_zero=dict(init_weight=0),
+        init_attn=None,
+        *,
+        rngs: nnx.Rngs,
     ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.emb_channels = emb_channels
-        self.num_heads = 0 if not attention else num_heads if num_heads is not None else out_channels // channels_per_head
+        self.num_heads = (
+            0
+            if not attention
+            else num_heads
+            if num_heads is not None
+            else out_channels // channels_per_head
+        )
         self.dropout = dropout
         self.skip_scale = skip_scale
-        self.adaptive_scale = adaptive_scale        
+        self.adaptive_scale = adaptive_scale
 
         self.norm0 = GroupNorm(rngs=rngs, num_channels=in_channels, eps=eps)
-        self.conv0 = Conv2d(rngs=rngs, in_channels=in_channels, out_channels=out_channels, kernel=3, up=up, down=down, resample_filter=resample_filter, **init)
-        self.affine = Linear(rngs=rngs, in_features=emb_channels, out_features=out_channels*(2 if adaptive_scale else 1), **init)
+        self.conv0 = Conv2d(
+            rngs=rngs,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel=3,
+            up=up,
+            down=down,
+            resample_filter=resample_filter,
+            **init,
+        )
+        self.affine = Linear(
+            rngs=rngs,
+            in_features=emb_channels,
+            out_features=out_channels * (2 if adaptive_scale else 1),
+            **init,
+        )
         self.norm1 = GroupNorm(rngs=rngs, num_channels=out_channels, eps=eps)
-        self.conv1 = Conv2d(rngs=rngs, in_channels=out_channels, out_channels=out_channels, kernel=3, **init_zero)
+        self.conv1 = Conv2d(
+            rngs=rngs,
+            in_channels=out_channels,
+            out_channels=out_channels,
+            kernel=3,
+            **init_zero,
+        )
 
         self.skip = None
         if out_channels != in_channels or up or down:
             kernel = 1 if resample_proj or out_channels != in_channels else 0
-            self.skip = Conv2d(rngs, in_channels=in_channels, out_channels=out_channels, kernel=kernel, up=up, down=down, resample_filter=resample_filter, **init)
+            self.skip = Conv2d(
+                rngs=rngs,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel=kernel,
+                up=up,
+                down=down,
+                resample_filter=resample_filter,
+                **init,
+            )
 
         if self.num_heads:
-            self.norm2 = GroupNorm(rngs, num_channels=out_channels, eps=eps)
+            self.norm2 = GroupNorm(rngs=rngs, num_channels=out_channels, eps=eps)
             attn_init = init_attn if init_attn is not None else init
-            self.qkv = Conv2d(rngs, in_channels=out_channels, out_channels=out_channels*3, kernel=1, **(attn_init if attn_init is not None else init))
-            self.proj = Conv2d(rngs, in_channels=out_channels, out_channels=out_channels, kernel=1, **init_zero)
+            self.qkv = Conv2d(
+                rngs=rngs,
+                in_channels=out_channels,
+                out_channels=out_channels * 3,
+                kernel=1,
+                **(attn_init if attn_init is not None else init),
+            )
+            self.proj = Conv2d(
+                rngs=rngs,
+                in_channels=out_channels,
+                out_channels=out_channels,
+                kernel=1,
+                **init_zero,
+            )
 
     def __call__(self, x, emb, train=True):
         # Input is already in NHWC format
         orig = x
-        
+
         # First conv block
         x = self.norm0(x)
         x = jax.nn.silu(x)
@@ -257,7 +383,7 @@ class UNetBlock(nnx.Module):
         params = self.affine(emb)
         # params = params.reshape(*params.shape[:-1], -1, 1, 1)  # Add spatial dimensions
         params = params.reshape(params.shape[0], 1, 1, -1)
-        
+
         # Apply adaptive scaling or shift
         x = self.norm1(x)
         if self.adaptive_scale:
@@ -265,14 +391,18 @@ class UNetBlock(nnx.Module):
             x = shift + x * (scale + 1)
         else:
             x = x + params
-        x = jax.nn.silu(x)
+        x = nnx.silu(x)
 
         # Second conv block with properly handled dropout
         if self.dropout > 0 and train:
-            dropout_key = self.make_rng('dropout')
-            x = jax.random.bernoulli(dropout_key, 1 - self.dropout, x.shape) * x / (1 - self.dropout)
+            dropout_key = self.rngs.dropout()
+            x = (
+                jax.random.bernoulli(dropout_key, 1 - self.dropout, x.shape)
+                * x
+                / (1 - self.dropout)
+            )
         x = self.conv1(x)
-        
+
         # Skip connection
         if self.skip is not None:
             orig = self.skip(orig)
@@ -284,38 +414,53 @@ class UNetBlock(nnx.Module):
             identity = x
             x = self.norm2(x)
             qkv = self.qkv(x)
-            
+
             # Reshape for attention
             B, H, W, C = qkv.shape
             qkv = qkv.reshape(B, H * W, 3, self.num_heads, -1)
-            qkv = jnp.transpose(qkv, (2, 0, 3, 1, 4))  # (3, B, num_heads, H*W, C//num_heads)
+            qkv = jnp.transpose(
+                qkv, (2, 0, 3, 1, 4)
+            )  # (3, B, num_heads, H*W, C//num_heads)
             q, k, v = qkv
-            
+
             # Scaled dot product attention with optional dropout
-            scale = (q.shape[-1] ** -0.5)
+            scale = q.shape[-1] ** -0.5
             attention_weights = (q @ jnp.transpose(k, (0, 1, 3, 2))) * scale
-            
+
             # Apply attention dropout if in training mode
             if self.dropout > 0 and train:
-                attn_key = self.make_rng('dropout')
-                attention_weights = jax.random.bernoulli(attn_key, 1 - self.dropout, attention_weights.shape) * attention_weights / (1 - self.dropout)
-            
-            attention = jax.nn.softmax(attention_weights, axis=-1)
-            x = (attention @ v).transpose(0, 1, 3, 2)  # (B, num_heads, H*W, C//num_heads)
-            
+                attn_key = self.rngs.dropout()
+                attention_weights = (
+                    jax.random.bernoulli(
+                        attn_key, 1 - self.dropout, attention_weights.shape
+                    )
+                    * attention_weights
+                    / (1 - self.dropout)
+                )
+
+            attention = nnx.softmax(attention_weights, axis=-1)
+            x = (attention @ v).transpose(
+                0, 1, 3, 2
+            )  # (B, num_heads, H*W, C//num_heads)
+
             # Reshape back
             x = x.reshape(B, H, W, -1)
             x = self.proj(x)
-            
+
             # Final dropout for projection
             if self.dropout > 0 and train:
-                proj_key = self.make_rng('dropout')
-                x = jax.random.bernoulli(proj_key, 1 - self.dropout, x.shape) * x / (1 - self.dropout)
-            
+                proj_key = self.rngs.dropout()
+                x = (
+                    jax.random.bernoulli(proj_key, 1 - self.dropout, x.shape)
+                    * x
+                    / (1 - self.dropout)
+                )
+
             x = x + identity
             x = x * self.skip_scale
-        
+
         return x
+
 
 class PositionalEmbedding(nnx.Module):
     def __init__(self, num_channels, max_positions=10000, endpoint=False):
@@ -325,25 +470,25 @@ class PositionalEmbedding(nnx.Module):
         self.endpoint = endpoint
 
     def __call__(self, x):
-        freqs = jnp.arange(0, self.num_channels//2, dtype=jnp.float32)
+        freqs = jnp.arange(0, self.num_channels // 2, dtype=jnp.float32)
         freqs = freqs / (self.num_channels // 2 - (1 if self.endpoint else 0))
         freqs = (1 / self.max_positions) ** freqs
         x = jnp.outer(x, freqs)
         x = jnp.concatenate([jnp.cos(x), jnp.sin(x)], axis=1)
         return x
 
+
 class FourierEmbedding(nnx.Module):
-    def __init__(self, rngs, num_channels, scale=16):
+    def __init__(self, num_channels, scale=16, *, rngs: nnx.Rngs):
         super().__init__()
-        
+
         # Initialize with proper RNG key
         self.freqs = nnx.Param(
             jax.random.normal(rngs.params(), (num_channels // 2,)) * scale,
-            trainable=False  # Typically Fourier embeddings are fixed
+            trainable=False,  # Typically Fourier embeddings are fixed
         )
 
     def __call__(self, x):
         x = jnp.outer(x, 2 * jnp.pi * self.freqs.value)
         x = jnp.concatenate([jnp.cos(x), jnp.sin(x)], axis=1)
         return x
-         

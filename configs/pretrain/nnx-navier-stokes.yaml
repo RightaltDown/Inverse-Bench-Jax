@@ -1,0 +1,71 @@
+training:
+  exp_dir: exps/pretrain
+  exp_name: EDM-NS2d
+  batch_size: 256
+  num_steps: 100000
+  warmup_steps: 500
+  lr_min: 0.00001
+  lr_max: 0.0001
+  save_freq: 5000
+  resume: False
+  resume_path: None
+  resume_step: 0
+  dataset_name: navier_stokes
+  num_train_workers: 0
+  num_epochs: 1000
+  
+
+log:
+  wandb: false
+  project: EKS-DM-NS2d
+  group: training
+  exp_name: EDM-TEST
+  wandb_freq: 100
+  print_freq: 100
+  # save_freq: 5000
+  # sample_freq: 5000
+  save_freq: 500
+  sample_freq: 500
+
+data:
+  dataloader:
+    _target_: training.dataset.LMDBData
+    root: data/navier-stokes-train/Re200.0-t5.0
+    resolution: 128
+    std: 5.0
+
+model:
+  _target_: models.nnx_precond.edm_precond_factory
+  model_type: DhariwalUNet
+  img_resolution: 128
+  img_channels: 1
+  label_dim: 0
+  model_channels: 128
+  channel_mult: [1, 1, 1, 2, 2]
+  attn_resolutions: [16]
+  num_blocks: 1
+  dropout: 0.0
+
+loss:
+  _target_: training.loss.edm_loss_fn
+
+scheduler:
+  _target_: utils.nnx_scheduler.Scheduler
+  num_steps: 100000
+  schedule: linear
+  timestep: poly-7
+  scaling: none
+
+
+train:
+  lr: 0.0001
+  batch_size: 256
+  warmup_steps: 500
+  ema_decay: 0.9999
+  grad_clip: 0.0
+  ema_halflife_nimg: 204800
+  ema_rampup_ratio: 0.05
+  num_epochs: 1000
+  num_steps: 100_000
+  restore_checkpoints: False
+  checkpoint_path: None

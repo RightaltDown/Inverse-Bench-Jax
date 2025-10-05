@@ -4,26 +4,39 @@ import pandas as pd
 import torch
 import numpy as np
 import ehtim as eh
-from eval import Evaluator
 import copy
 from piq import psnr
 import torch.nn.functional as F
-from typing import Dict
 
 
 class BlackHoleImaging(BaseOperator):
     """
-        PyTorch Version of Black Hole Imaging Forward Operator based on eht-imaging library.
-            https://github.com/achael/eht-imaging
+    PyTorch Version of Black Hole Imaging Forward Operator based on eht-imaging library.
+        https://github.com/achael/eht-imaging
 
-        This class utilize a reference observation for observation setup (e.g. telescope u,v map)
+    This class utilize a reference observation for observation setup (e.g. telescope u,v map)
     """
 
-    def __init__(self, root='dataset/blackhole', observation_time_ratio=1.0, noise_type='vis_thermal', imsize=64, w1=0,
-                 w2=1, w3=1, w4=0.5, sigma_noise=0.0, unnorm_shift=1.0, unnorm_scale=0.5, device='cuda'):
+    def __init__(
+        self,
+        root="dataset/blackhole",
+        observation_time_ratio=1.0,
+        noise_type="vis_thermal",
+        imsize=64,
+        w1=0,
+        w2=1,
+        w3=1,
+        w4=0.5,
+        sigma_noise=0.0,
+        unnorm_shift=1.0,
+        unnorm_scale=0.5,
+        device="cuda",
+    ):
         super().__init__(sigma_noise, unnorm_shift, unnorm_scale, device)
         # load observations
-        A_vis, A_cp, A_camp, obs, im, multiplier, sigma = self.process_obs(root, imsize, observation_time_ratio)
+        A_vis, A_cp, A_camp, obs, im, multiplier, sigma = self.process_obs(
+            root, imsize, observation_time_ratio
+        )
         self.ref_im = im
         self.ref_flux = np.sum(self.ref_im.ivec)
         self.ref_obs = obs
@@ -38,9 +51,15 @@ class BlackHoleImaging(BaseOperator):
         self.sigma = torch.tensor(sigma).to(device)
 
         # forward matrix
-        self.A_vis = torch.from_numpy(A_vis).unsqueeze(0).unsqueeze(0).cfloat().to(device)  # [1,1,m,n]
-        self.A_cp = torch.from_numpy(A_cp).unsqueeze(1).unsqueeze(1).cfloat().to(device)  # [3,1,1,m,n]
-        self.A_camp = torch.from_numpy(A_camp).unsqueeze(1).unsqueeze(1).cfloat().to(device)  # [4,1,1,m,n]
+        self.A_vis = (
+            torch.from_numpy(A_vis).unsqueeze(0).unsqueeze(0).cfloat().to(device)
+        )  # [1,1,m,n]
+        self.A_cp = (
+            torch.from_numpy(A_cp).unsqueeze(1).unsqueeze(1).cfloat().to(device)
+        )  # [3,1,1,m,n]
+        self.A_camp = (
+            torch.from_numpy(A_camp).unsqueeze(1).unsqueeze(1).cfloat().to(device)
+        )  # [4,1,1,m,n]
 
         # dimension
         self.amp_dim = self.A_vis.shape[-2]
@@ -59,40 +78,46 @@ class BlackHoleImaging(BaseOperator):
 
     # 0. set up forward function
     @staticmethod
-    def process_obs(
-            root,
-            imsize,
-            observation_time_ratio=1.0
-    ):
-        obsfile = root + '/' + 'obs.uvfits'
-        gtfile = root + '/' + 'gt.fits'
+    def process_obs(root, imsize, observation_time_ratio=1.0):
+        obsfile = root + "/" + "obs.uvfits"
+        gtfile = root + "/" + "gt.fits"
         # load observations
         obs = eh.obsdata.load_uvfits(obsfile)
         # subsample the observation
         pd_data = pd.DataFrame(obs.data)
-        time_list = np.array(sorted(list(set(pd_data['time']))))
-        time_list = time_list[:int(len(time_list) * observation_time_ratio)]
-        pd_data = pd_data[pd_data['time'].isin(time_list)]
-        obsdata = pd_data.to_records(index=False).view(np.ndarray).astype(eh.DTPOL_STOKES)
+        time_list = np.array(sorted(list(set(pd_data["time"]))))
+        time_list = time_list[: int(len(time_list) * observation_time_ratio)]
+        pd_data = pd_data[pd_data["time"].isin(time_list)]
+        obsdata = (
+            pd_data.to_records(index=False).view(np.ndarray).astype(eh.DTPOL_STOKES)
+        )
         obs.data = obsdata
         # get the reference ground truth image
         im = eh.image.load_fits(gtfile)
         im = im.regrid_image(im.fovx(), imsize)
         # rescale image
         multiplier = im.ivec.max()
-        sigma = obs.data['sigma'] / multiplier
+        sigma = obs.data["sigma"] / multiplier
         # get forward model for complex visibilities.
         _, _, A_vis = eh.imaging.imager_utils.chisqdata_vis(obs, im, mask=[])
         # get forward model for closure phases.
         _, _, A_cp = eh.imaging.imager_utils.chisqdata_cphase(obs, im, mask=[])
         # get forward model for closure amplitudes.
         _, _, A_camp = eh.imaging.imager_utils.chisqdata_logcamp(obs, im, mask=[])
-        return A_vis, np.stack(A_cp, axis=0), np.stack(A_camp, axis=0), obs, im, multiplier, sigma
+        return (
+            A_vis,
+            np.stack(A_cp, axis=0),
+            np.stack(A_camp, axis=0),
+            obs,
+            im,
+            multiplier,
+            sigma,
+        )
 
     @staticmethod
     def estimate_flux(obs):
         # estimate the total flux from the observation
-        data = obs.unpack_bl('ALMA', 'APEX', 'amp')
+        data = obs.unpack_bl("ALMA", "APEX", "amp")
         amp_list = []
         for pair in data:
             amp = pair[0][1]
@@ -103,30 +128,53 @@ class BlackHoleImaging(BaseOperator):
     def get_index_matrix(self, obs):
         obs_data_df = pd.DataFrame(obs.data)
         map_fn, conjugate_fn = {}, {}
-        for i, (time, t1, t2) in enumerate(zip(obs_data_df['time'], obs_data_df['t1'], obs_data_df['t2'])):
+        for i, (time, t1, t2) in enumerate(
+            zip(obs_data_df["time"], obs_data_df["t1"], obs_data_df["t2"])
+        ):
             map_fn[(time, t1, t2)] = i
             conjugate_fn[(time, t1, t2)] = 0
             map_fn[(time, t2, t1)] = i
             conjugate_fn[(time, t2, t1)] = 1
 
         # closure phase index
-        bispec_df = pd.DataFrame(obs.bispectra(count='min'))
+        bispec_df = pd.DataFrame(obs.bispectra(count="min"))
         cp_index, cp_conjugate = [], []
-        for time, t1, t2, t3 in zip(bispec_df['time'], bispec_df['t1'], bispec_df['t2'], bispec_df['t3']):
-            idx = [map_fn[(time, t1, t2)], map_fn[(time, t2, t3)], map_fn[(time, t3, t1)]]
-            conj = [conjugate_fn[(time, t1, t2)], conjugate_fn[(time, t2, t3)], conjugate_fn[(time, t3, t1)]]
+        for time, t1, t2, t3 in zip(
+            bispec_df["time"], bispec_df["t1"], bispec_df["t2"], bispec_df["t3"]
+        ):
+            idx = [
+                map_fn[(time, t1, t2)],
+                map_fn[(time, t2, t3)],
+                map_fn[(time, t3, t1)],
+            ]
+            conj = [
+                conjugate_fn[(time, t1, t2)],
+                conjugate_fn[(time, t2, t3)],
+                conjugate_fn[(time, t3, t1)],
+            ]
             cp_index.append(idx)
             cp_conjugate.append(conj)
         self.cp_index = torch.tensor(cp_index).long().cuda()
         self.cp_conjugate = torch.tensor(cp_conjugate).long().cuda()
 
         # log closure amplitude index
-        camp_df = pd.DataFrame(obs.c_amplitudes(count='min'))
+        camp_df = pd.DataFrame(obs.c_amplitudes(count="min"))
         camp_index, camp_conjugate = [], []
-        for time, t1, t2, t3, t4 in zip(camp_df['time'], camp_df['t1'], camp_df['t2'], camp_df['t3'], camp_df['t4']):
-            idx = [map_fn[(time, t1, t2)], map_fn[(time, t3, t4)], map_fn[(time, t1, t4)], map_fn[(time, t2, t3)]]
-            conj = [conjugate_fn[(time, t1, t2)], conjugate_fn[(time, t3, t4)], conjugate_fn[(time, t1, t4)],
-                    conjugate_fn[(time, t2, t3)]]
+        for time, t1, t2, t3, t4 in zip(
+            camp_df["time"], camp_df["t1"], camp_df["t2"], camp_df["t3"], camp_df["t4"]
+        ):
+            idx = [
+                map_fn[(time, t1, t2)],
+                map_fn[(time, t3, t4)],
+                map_fn[(time, t1, t4)],
+                map_fn[(time, t2, t3)],
+            ]
+            conj = [
+                conjugate_fn[(time, t1, t2)],
+                conjugate_fn[(time, t3, t4)],
+                conjugate_fn[(time, t1, t4)],
+                conjugate_fn[(time, t2, t3)],
+            ]
             camp_index.append(idx)
             camp_conjugate.append(conj)
         self.camp_index = torch.tensor(camp_index).long().cuda()
@@ -165,7 +213,9 @@ class BlackHoleImaging(BaseOperator):
         v1 = self.sigma[self.cp_index[:, 0]][None, None, :, None]
         v2 = self.sigma[self.cp_index[:, 1]][None, None, :, None]
         v3 = self.sigma[self.cp_index[:, 2]][None, None, :, None]
-        sigmacp = (v1 ** 2 / i1.abs() ** 2 + v2 ** 2 / i2.abs() ** 2 + v3 ** 2 / i3.abs() ** 2).sqrt()
+        sigmacp = (
+            v1**2 / i1.abs() ** 2 + v2**2 / i2.abs() ** 2 + v3**2 / i3.abs() ** 2
+        ).sqrt()
         return cphase, sigmacp
 
     def forward_logcamp_bispectra_from_image(self, x):
@@ -186,7 +236,7 @@ class BlackHoleImaging(BaseOperator):
         v2 = self.sigma[self.camp_index[:, 1]][None, None, :, None]
         v3 = self.sigma[self.camp_index[:, 2]][None, None, :, None]
         v4 = self.sigma[self.camp_index[:, 3]][None, None, :, None]
-        sigmaca = (v1 ** 2 / i1 ** 2 + v2 ** 2 / i2 ** 2 + v3 ** 2 / i3 ** 2 + v4 ** 2 / i4 ** 2).sqrt()
+        sigmaca = (v1**2 / i1**2 + v2**2 / i2**2 + v3**2 / i3**2 + v4**2 / i4**2).sqrt()
         return camp, sigmaca
 
     def forward_from_image(self, x):
@@ -195,7 +245,9 @@ class BlackHoleImaging(BaseOperator):
         logcamp, sigmacamp = self.forward_logcamp_from_image(x)
         flux = self.forward_flux(x)
 
-        return self.compress(amp, sigmaamp, cphase, sigmacp, logcamp, sigmacamp, flux).float()
+        return self.compress(
+            amp, sigmaamp, cphase, sigmacp, logcamp, sigmacamp, flux
+        ).float()
 
     # 3. forward from visibilities
     def correct_vis_direction(self, vis, conj):
@@ -228,7 +280,9 @@ class BlackHoleImaging(BaseOperator):
         v1 = self.sigma[self.cp_index[:, 0]][None, None, :, None]
         v2 = self.sigma[self.cp_index[:, 1]][None, None, :, None]
         v3 = self.sigma[self.cp_index[:, 2]][None, None, :, None]
-        sigmacp = (v1 ** 2 / i1.abs() ** 2 + v2 ** 2 / i2.abs() ** 2 + v3 ** 2 / i3.abs() ** 2).sqrt()
+        sigmacp = (
+            v1**2 / i1.abs() ** 2 + v2**2 / i2.abs() ** 2 + v3**2 / i3.abs() ** 2
+        ).sqrt()
         return cphase, sigmacp
 
     def forward_logcamp_bispectra_from_vis(self, vis):
@@ -256,7 +310,7 @@ class BlackHoleImaging(BaseOperator):
         v2 = self.sigma[self.camp_index[:, 1]][None, None, :, None]
         v3 = self.sigma[self.camp_index[:, 2]][None, None, :, None]
         v4 = self.sigma[self.camp_index[:, 3]][None, None, :, None]
-        sigmaca = (v1 ** 2 / i1 ** 2 + v2 ** 2 / i2 ** 2 + v3 ** 2 / i3 ** 2 + v4 ** 2 / i4 ** 2).sqrt()
+        sigmaca = (v1**2 / i1**2 + v2**2 / i2**2 + v3**2 / i3**2 + v4**2 / i4**2).sqrt()
         return logcamp, sigmaca
 
     def forward_from_vis(self, x):
@@ -267,7 +321,9 @@ class BlackHoleImaging(BaseOperator):
         logcamp, sigmacamp = self.forward_logcamp_from_vis(vis)
         flux = self.forward_flux(x)
 
-        return self.compress(amp, sigmaamp, cphase, sigmacp, logcamp, sigmacamp, flux).float()
+        return self.compress(
+            amp, sigmaamp, cphase, sigmacp, logcamp, sigmacamp, flux
+        ).float()
 
     # 4. forward from EHT library
     @staticmethod
@@ -281,7 +337,9 @@ class BlackHoleImaging(BaseOperator):
         eht_images = []
         for pt_image in pt_images:
             eh_image = copy.deepcopy(ref_im)
-            eh_image.ivec = pt_image.clip(0, 1).detach().cpu().numpy().reshape(res, res).flatten()
+            eh_image.ivec = (
+                pt_image.clip(0, 1).detach().cpu().numpy().reshape(res, res).flatten()
+            )
             eht_images.append(eh_image)
         return eht_images
 
@@ -300,23 +358,54 @@ class BlackHoleImaging(BaseOperator):
 
             # visibilities amplitude
             adf = ehdf.make_amp(obs, debias=False)
-            amp = torch.from_numpy(adf['amp'].to_numpy())[None, None, :, None].float().to(x.device) / multiplier
-            sigmaamp = torch.from_numpy(adf['sigma'].to_numpy())[None, None, :, None].float().to(
-                x.device) / multiplier
+            amp = (
+                torch.from_numpy(adf["amp"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+                / multiplier
+            )
+            sigmaamp = (
+                torch.from_numpy(adf["sigma"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+                / multiplier
+            )
 
             # closure phase
-            cdf = ehdf.make_cphase_df(obs, count='min')
-            cp = torch.from_numpy(cdf['cphase'].to_numpy())[None, None, :, None].float().to(x.device) * eh.DEGREE
-            sigmacp = torch.from_numpy(cdf['sigmacp'].to_numpy())[None, None, :, None].float().to(
-                x.device) * eh.DEGREE
+            cdf = ehdf.make_cphase_df(obs, count="min")
+            cp = (
+                torch.from_numpy(cdf["cphase"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+                * eh.DEGREE
+            )
+            sigmacp = (
+                torch.from_numpy(cdf["sigmacp"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+                * eh.DEGREE
+            )
 
             # log closure amplitude
-            ldf = ehdf.make_camp_df(obs, count='min')
-            camp = torch.from_numpy(ldf['camp'].to_numpy())[None, None, :, None].float().to(x.device)
-            sigmaca = torch.from_numpy(ldf['sigmaca'].to_numpy())[None, None, :, None].float().to(x.device)
+            ldf = ehdf.make_camp_df(obs, count="min")
+            camp = (
+                torch.from_numpy(ldf["camp"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+            )
+            sigmaca = (
+                torch.from_numpy(ldf["sigmaca"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+            )
 
             # flux
-            flux = torch.tensor([self.estimate_flux(obs)])[None, None, :, None].float().to(x.device) / multiplier
+            flux = (
+                torch.tensor([self.estimate_flux(obs)])[None, None, :, None]
+                .float()
+                .to(x.device)
+                / multiplier
+            )
 
             y = torch.cat([amp, sigmaamp, cp, sigmacp, camp, sigmaca, flux], dim=2)
             pt_obs.append(y)
@@ -340,7 +429,10 @@ class BlackHoleImaging(BaseOperator):
     @staticmethod
     def chi2_cphase_from_meas(y_cphase_meas, y_cphase, y_cphase_sigma):
         angle_residual = y_cphase - y_cphase_meas
-        return 2. * torch.mean((1 - torch.cos(angle_residual)) / torch.square(y_cphase_sigma), dim=(1, 2, 3))
+        return 2.0 * torch.mean(
+            (1 - torch.cos(angle_residual)) / torch.square(y_cphase_sigma),
+            dim=(1, 2, 3),
+        )
 
     def chi2_logcamp(self, x, y_camp, y_logcamp_sigma):
         y_camp_pred, _ = self.forward_logcamp_from_image(x)
@@ -348,7 +440,10 @@ class BlackHoleImaging(BaseOperator):
 
     @staticmethod
     def chi2_logcamp_from_meas(y_logcamp_meas, y_logcamp, y_logcamp_sigma):
-        return torch.mean(torch.abs((y_logcamp_meas - y_logcamp) / y_logcamp_sigma) ** 2, dim=(1, 2, 3))
+        return torch.mean(
+            torch.abs((y_logcamp_meas - y_logcamp) / y_logcamp_sigma) ** 2,
+            dim=(1, 2, 3),
+        )
 
     def chi2_flux(self, x, y_flux):
         flux_pred = self.forward_flux(x)
@@ -372,7 +467,9 @@ class BlackHoleImaging(BaseOperator):
         cphase = cphase + torch.randn_like(cphase) * sigmacp
         logcamp = logcamp + torch.randn_like(logcamp) * sigmacamp
 
-        return self.compress(amp, sigmaamp, cphase, sigmacp, logcamp, sigmacamp, flux).float()
+        return self.compress(
+            amp, sigmaamp, cphase, sigmacp, logcamp, sigmacamp, flux
+        ).float()
 
     def measure_vis_error(self, x):
         vis = self.forward_vis(x)
@@ -387,7 +484,9 @@ class BlackHoleImaging(BaseOperator):
         logcamp, sigmacamp = self.forward_logcamp_from_vis(vis)
         flux = self.forward_flux(x)
 
-        return self.compress(amp, sigmaamp, cphase, sigmacp, logcamp, sigmacamp, flux).float()
+        return self.compress(
+            amp, sigmaamp, cphase, sigmacp, logcamp, sigmacamp, flux
+        ).float()
 
     def measure_eht(self, x):
         ref_im = self.ref_im
@@ -401,28 +500,61 @@ class BlackHoleImaging(BaseOperator):
             eh_image.ivec = eh_image.ivec * multiplier
 
             # observe the image
-            obs = eh_image.observe_same(ref_obs, phasecal=False, ampcal=False, verbose=False)
+            obs = eh_image.observe_same(
+                ref_obs, phasecal=False, ampcal=False, verbose=False
+            )
             # eht_obs.append(obs)
 
             # visibilities amplitude
             adf = ehdf.make_amp(obs, debias=False)
-            amp = torch.from_numpy(adf['amp'].to_numpy())[None, None, :, None].float().to(x.device) / multiplier
-            sigmaamp = torch.from_numpy(adf['sigma'].to_numpy())[None, None, :, None].float().to(
-                x.device) / multiplier
+            amp = (
+                torch.from_numpy(adf["amp"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+                / multiplier
+            )
+            sigmaamp = (
+                torch.from_numpy(adf["sigma"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+                / multiplier
+            )
 
             # closure phase
-            cdf = ehdf.make_cphase_df(obs, count='min')
-            cp = torch.from_numpy(cdf['cphase'].to_numpy())[None, None, :, None].float().to(x.device) * eh.DEGREE
-            sigmacp = torch.from_numpy(cdf['sigmacp'].to_numpy())[None, None, :, None].float().to(
-                x.device) * eh.DEGREE
+            cdf = ehdf.make_cphase_df(obs, count="min")
+            cp = (
+                torch.from_numpy(cdf["cphase"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+                * eh.DEGREE
+            )
+            sigmacp = (
+                torch.from_numpy(cdf["sigmacp"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+                * eh.DEGREE
+            )
 
             # log closure amplitude
-            ldf = ehdf.make_camp_df(obs, count='min')
-            camp = torch.from_numpy(ldf['camp'].to_numpy())[None, None, :, None].float().to(x.device)
-            sigmaca = torch.from_numpy(ldf['sigmaca'].to_numpy())[None, None, :, None].float().to(x.device)
+            ldf = ehdf.make_camp_df(obs, count="min")
+            camp = (
+                torch.from_numpy(ldf["camp"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+            )
+            sigmaca = (
+                torch.from_numpy(ldf["sigmaca"].to_numpy())[None, None, :, None]
+                .float()
+                .to(x.device)
+            )
 
             # flux
-            flux = torch.tensor([self.estimate_flux(obs)])[None, None, :, None].float().to(x.device) / multiplier
+            flux = (
+                torch.tensor([self.estimate_flux(obs)])[None, None, :, None]
+                .float()
+                .to(x.device)
+                / multiplier
+            )
 
             y = torch.cat([amp, sigmaamp, cp, sigmacp, camp, sigmaca, flux], dim=2)
             pt_obs.append(y)
@@ -431,30 +563,32 @@ class BlackHoleImaging(BaseOperator):
 
     # 7. util functions
     def compress(self, amp, sigmaamp, cphase, sigmacp, logcamp, sigmacamp, flux):
-        return torch.cat([amp, sigmaamp, cphase, sigmacp, logcamp, sigmacamp, flux], dim=2)
+        return torch.cat(
+            [amp, sigmaamp, cphase, sigmacp, logcamp, sigmacamp, flux], dim=2
+        )
 
     def decompress(self, y):
         cur = 0
         # visibillity amplitude
-        amp = y[:, :, cur:cur + self.amp_dim]
+        amp = y[:, :, cur : cur + self.amp_dim]
         cur += self.amp_dim
-        sigmaamp = y[:, :, cur:cur + self.amp_dim]
+        sigmaamp = y[:, :, cur : cur + self.amp_dim]
         cur += self.amp_dim
 
         # closure phase
-        cphase = y[:, :, cur:cur + self.cphase_dim]
+        cphase = y[:, :, cur : cur + self.cphase_dim]
         cur += self.cphase_dim
-        sigmacp = y[:, :, cur:cur + self.cphase_dim]
+        sigmacp = y[:, :, cur : cur + self.cphase_dim]
         cur += self.cphase_dim
 
         # log closure amplitude
-        logcamp = y[:, :, cur:cur + self.logcamp_dim]
+        logcamp = y[:, :, cur : cur + self.logcamp_dim]
         cur += self.logcamp_dim
-        sigmacamp = y[:, :, cur:cur + self.logcamp_dim]
+        sigmacamp = y[:, :, cur : cur + self.logcamp_dim]
         cur += self.logcamp_dim
 
         # flux
-        flux = y[:, :, cur:cur + self.flux_dim]
+        flux = y[:, :, cur : cur + self.flux_dim]
         cur += self.flux_dim
         assert cur == y.shape[2]
 
@@ -470,8 +604,12 @@ class BlackHoleImaging(BaseOperator):
         return similarity.min().item()
 
     def compare(self, y1, y2, verbose=False):
-        amp1, sigmaamp1, cphase1, sigmacp1, logcamp1, sigmacamp1, flux1 = self.decompress(y1)
-        amp2, sigmaamp2, cphase2, sigmacp2, logcamp2, sigmacamp2, flux2 = self.decompress(y2)
+        amp1, sigmaamp1, cphase1, sigmacp1, logcamp1, sigmacamp1, flux1 = (
+            self.decompress(y1)
+        )
+        amp2, sigmaamp2, cphase2, sigmacp2, logcamp2, sigmacamp2, flux2 = (
+            self.decompress(y2)
+        )
 
         amp_similarity = self.cosine_similarity(amp1, amp2)
         cphase_similarity = self.cosine_similarity(cphase1, cphase2)
@@ -491,28 +629,48 @@ class BlackHoleImaging(BaseOperator):
             print("sigmacp similarity: {:.3f} %".format(sigmacp_similarity * 100))
             print("sigmacamp similarity: {:.3f} %".format(sigmacamp_similarity * 100))
         similarity = np.max(
-            [amp_similarity, cphase_similarity, logcamp_similarity, flux_similarity, sigmaamp_similarity,
-             sigmacp_similarity, sigmacamp_similarity])
+            [
+                amp_similarity,
+                cphase_similarity,
+                logcamp_similarity,
+                flux_similarity,
+                sigmaamp_similarity,
+                sigmacp_similarity,
+                sigmacamp_similarity,
+            ]
+        )
         return similarity
 
     def sanity_check(self, x):
         x = self.unnormalize(x)
         # from image
-        print('forward by image...')
+        print("forward by image...")
         y_image = self.forward_from_image(x)
 
         # from vis
-        print('forward by visibility...')
+        print("forward by visibility...")
         y_vis = self.forward_from_vis(x)
 
         # from EHT
-        print('forward by EHT...')
+        print("forward by EHT...")
         y_eht = self.forward_from_eht(x)
 
         # compare
-        print('compare image and vis (cosine similarity): {:.3f} %'.format(self.compare(y_image, y_vis) * 100))
-        print('compare image and EHT (cosine similarity): {:.3f} %'.format(self.compare(y_image, y_eht) * 100))
-        print('compare vis and EHT (cosine similarity): {:.3f} %'.format(self.compare(y_vis, y_eht) * 100))
+        print(
+            "compare image and vis (cosine similarity): {:.3f} %".format(
+                self.compare(y_image, y_vis) * 100
+            )
+        )
+        print(
+            "compare image and EHT (cosine similarity): {:.3f} %".format(
+                self.compare(y_image, y_eht) * 100
+            )
+        )
+        print(
+            "compare vis and EHT (cosine similarity): {:.3f} %".format(
+                self.compare(y_vis, y_eht) * 100
+            )
+        )
 
     # 9. evaluating chi-square
     @staticmethod
@@ -545,20 +703,32 @@ class BlackHoleImaging(BaseOperator):
         tx, ty = tx.flatten(), ty.flatten()
 
         first_row = torch.stack([torch.ones_like(tx), torch.zeros_like(tx), tx], dim=-1)
-        second_row = torch.stack([torch.zeros_like(ty), torch.ones_like(ty), ty], dim=-1)
+        second_row = torch.stack(
+            [torch.zeros_like(ty), torch.ones_like(ty), ty], dim=-1
+        )
         theta = torch.stack([first_row, second_row], dim=1)
         grid = F.affine_grid(theta, (tx.shape[0], *shape), align_corners=True)
         grid = grid.unsqueeze(0).repeat(batch_size, 1, 1, 1, 1)
 
         # shift image2
         N, S = grid.shape[:2]
-        flatten_image1 = image1.unsqueeze(1).repeat(1, S, 1, 1, 1).flatten(0, 1).clip(0, 1)
-        flatten_image2 = image2.unsqueeze(1).repeat(1, S, 1, 1, 1).flatten(0, 1).clip(0, 1)
+        flatten_image1 = (
+            image1.unsqueeze(1).repeat(1, S, 1, 1, 1).flatten(0, 1).clip(0, 1)
+        )
+        flatten_image2 = (
+            image2.unsqueeze(1).repeat(1, S, 1, 1, 1).flatten(0, 1).clip(0, 1)
+        )
         flatten_grid = grid.flatten(0, 1)
-        trans_image2 = F.grid_sample(flatten_image2.cpu(), flatten_grid.cpu(), align_corners=True).to(image1.device).clip(0, 1)
-        eval_psnr = psnr(flatten_image1, trans_image2, data_range=1.0, reduction='none')
+        trans_image2 = (
+            F.grid_sample(flatten_image2.cpu(), flatten_grid.cpu(), align_corners=True)
+            .to(image1.device)
+            .clip(0, 1)
+        )
+        eval_psnr = psnr(flatten_image1, trans_image2, data_range=1.0, reduction="none")
         argmax = eval_psnr.view(N, S).max(dim=1)[1]
-        aligned_image2 = trans_image2.view(N, S, *image2.shape[1:])[torch.arange(N), argmax]
+        aligned_image2 = trans_image2.view(N, S, *image2.shape[1:])[
+            torch.arange(N), argmax
+        ]
         return aligned_image2
 
     def blur_images(self, samples, factor=15):
@@ -566,19 +736,26 @@ class BlackHoleImaging(BaseOperator):
         blur_samples = []
         for eht_image in eht_images:
             blur_eht_image = eht_image.blur_circ(factor * eh.RADPERUAS)
-            pt_image = torch.from_numpy(blur_eht_image.ivec.reshape(1, 1, 64, 64).astype(np.float32))
+            pt_image = torch.from_numpy(
+                blur_eht_image.ivec.reshape(1, 1, 64, 64).astype(np.float32)
+            )
             blur_samples.append(pt_image)
         blur_samples = torch.cat(blur_samples).to(samples.device)
         return blur_samples
 
     @staticmethod
     def aligned_psnr(image1, aligned_image2):
-        return psnr(image1.clip(0, 1), aligned_image2.clip(0, 1), data_range=1.0, reduction='none')
+        return psnr(
+            image1.clip(0, 1),
+            aligned_image2.clip(0, 1),
+            data_range=1.0,
+            reduction="none",
+        )
 
     def blur_aligned_psnr(self, image1, aligned_image2, factor=15):
         blur_image1 = self.blur_images(image1, factor).clip(0, 1)
         blur_aligned_image2 = self.blur_images(aligned_image2, factor).clip(0, 1)
-        return psnr(blur_image1, blur_aligned_image2, data_range=1.0, reduction='none')
+        return psnr(blur_image1, blur_aligned_image2, data_range=1.0, reduction="none")
 
     def evaluate_psnr(self, image1, image2, blur_factors=(0, 10, 15, 20)):
         aligned_image2 = self.aligned_images(image1, image2)
@@ -599,41 +776,58 @@ class BlackHoleImaging(BaseOperator):
         x = self.unnormalize(x)
         return self.forward_from_vis(x)
 
-    def __call__(self, 
-                 data, 
-                 **kwargs):
-        x = data['target']
+    def __call__(self, data, **kwargs):
+        x = data["target"]
         x = self.unnormalize(x)
-        if self.noise_type == 'gaussian':
+        if self.noise_type == "gaussian":
             return self.measure_guassian(x)
-        elif self.noise_type == 'vis_thermal':
+        elif self.noise_type == "vis_thermal":
             return self.measure_vis_error(x)
-        elif self.noise_type == 'eht':
+        elif self.noise_type == "eht":
             return self.measure_eht(x)
         else:
-            raise ValueError('Unknown noise type')
+            raise ValueError("Unknown noise type")
 
     def loss(self, x, y):
         x = self.unnormalize(x)
-        y_amp, y_amp_sigma, y_cp, y_cphase_sigma, y_camp, y_logcamp_sigma, y_flux = self.decompress(y)
+        y_amp, y_amp_sigma, y_cp, y_cphase_sigma, y_camp, y_logcamp_sigma, y_flux = (
+            self.decompress(y)
+        )
         amp_loss = self.chi2_amp(x, y_amp, y_amp_sigma)
         cp_loss = self.chi2_cphase(x, y_cp, y_cphase_sigma)
         camp_loss = self.chi2_logcamp(x, y_camp, y_logcamp_sigma)
         flux_loss = self.chi2_flux(x, y_flux)
 
-        data_fit = self.weight_amp * amp_loss + self.weight_cp * cp_loss + self.weight_camp * camp_loss + self.weight_flux * flux_loss
+        data_fit = (
+            self.weight_amp * amp_loss
+            + self.weight_cp * cp_loss
+            + self.weight_camp * camp_loss
+            + self.weight_flux * flux_loss
+        )
         return data_fit * 2
 
     def loss_m(self, yx, y):
-        yx_amp, yx_amp_sigma, yx_cp, yx_cphase_sigma, yx_camp, yx_logcamp_sigma, yx_flux = self.decompress(yx)
-        y_amp, y_amp_sigma, y_cp, y_cphase_sigma, y_camp, y_logcamp_sigma, y_flux = self.decompress(y)
+        (
+            yx_amp,
+            yx_amp_sigma,
+            yx_cp,
+            yx_cphase_sigma,
+            yx_camp,
+            yx_logcamp_sigma,
+            yx_flux,
+        ) = self.decompress(yx)
+        y_amp, y_amp_sigma, y_cp, y_cphase_sigma, y_camp, y_logcamp_sigma, y_flux = (
+            self.decompress(y)
+        )
         amp_loss = self.chi2_amp_from_meas(yx_amp, y_amp, y_amp_sigma)
         cp_loss = self.chi2_cphase_from_meas(yx_cp, y_cp, y_cphase_sigma)
         camp_loss = self.chi2_logcamp_from_meas(yx_camp, y_camp, y_logcamp_sigma)
         flux_loss = self.chi2_flux_from_meas(yx_flux, y_flux)
 
-        data_fit = self.weight_amp * amp_loss + self.weight_cp * cp_loss + self.weight_camp * camp_loss + self.weight_flux * flux_loss
+        data_fit = (
+            self.weight_amp * amp_loss
+            + self.weight_cp * cp_loss
+            + self.weight_camp * camp_loss
+            + self.weight_flux * flux_loss
+        )
         return data_fit * 2
-
-
-
