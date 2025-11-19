@@ -1,8 +1,8 @@
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, SubsetRandomSampler
 import numpy as np
 import torch
 from training.dataset import LMDBData
-
+import random
 
 def collate_fn(batch):
     """
@@ -62,23 +62,23 @@ def collate_fn(batch):
 
 def navier_stokes_data(config):
     root = "data/navier-stokes-train/Re200.0-t5.0"
-    # num_train_workers = config.training.num_train_workers
-    # num_samples = config.training.batch_size * 4
+    num_train_workers = config.num_train_workers
+    num_samples = config.per_device_batch_size * 4
     dataset = LMDBData(root=root)  # LMDBData will normalize
 
-    return dataset
-    # indices = list(range(min(num_samples, dataset.length)))  # TODO: remove this
-    # sampler = SubsetRandomSampler(indices)  # TODO: remove this
-    # dataloader = DataLoader(
-    #     dataset,
-    #     collate_fn=collate_fn,
-    #     batch_size=config.training.batch_size,
-    #     sampler=sampler,
-    #     num_workers=num_train_workers,
-    #     pin_memory=True,
-    #     drop_last=True,
-    # )
-    # return dataloader, dataset
+    # return dataset
+    indices = random.sample(range(dataset.length), num_samples)
+    sampler = SubsetRandomSampler(indices)  # TODO: remove this
+    dataloader = DataLoader(
+        dataset,
+        collate_fn=collate_fn,
+        batch_size=config.per_device_batch_size,
+        sampler=sampler,
+        num_workers=num_train_workers,
+        pin_memory=True,
+        drop_last=True,
+    )
+    return dataloader, dataset
 
 
 def blackhole_data(n_devices, config):

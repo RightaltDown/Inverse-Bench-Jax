@@ -62,11 +62,7 @@ class DhariwalUNet(nnx.Module):
         self.label_dropout = label_dropout
         emb_channels = model_channels * channel_mult_emb
 
-        init = dict(
-            init_mode="kaiming_uniform",
-            init_weight=jnp.sqrt(1 / 3),
-            init_bias=jnp.sqrt(1 / 3),
-        )
+        init = dict(init_mode="kaiming_uniform", init_weight=jnp.sqrt(1 / 3), init_bias=jnp.sqrt(1 / 3))
         init_zero = dict(init_mode="kaiming_uniform", init_weight=0, init_bias=0)
         block_kwargs = dict(
             emb_channels=emb_channels,
@@ -89,24 +85,9 @@ class DhariwalUNet(nnx.Module):
             if augment_dim
             else None
         )
-        self.map_layer0 = Linear(
-            rngs=rngs, in_features=model_channels, out_features=emb_channels, **init
-        )
-        self.map_layer1 = Linear(
-            rngs=rngs, in_features=emb_channels, out_features=emb_channels, **init
-        )
-        self.map_label = (
-            Linear(
-                rngs=rngs,
-                in_features=label_dim,
-                out_features=emb_channels,
-                bias=False,
-                init_mode="kaiming_normal",
-                init_weight=np.sqrt(label_dim),
-            )
-            if label_dim
-            else None
-        )
+        self.map_layer0 = Linear(rngs=rngs, in_features=model_channels, out_features=emb_channels, **init)
+        self.map_layer1 = Linear(rngs=rngs, in_features=emb_channels, out_features=emb_channels, **init)
+        self.map_label = Linear(rngs=rngs, in_features=label_dim, out_features=emb_channels, bias=False, init_mode="kaiming_normal", init_weight=np.sqrt(label_dim)) if label_dim else None
 
         # Encoder
         self.enc = {}
@@ -122,7 +103,7 @@ class DhariwalUNet(nnx.Module):
                 )
                 self.enc_names.append(f"{res}x{res}_conv")
             else:
-                self.enc[f"{res}x{res}_down"] = UNetBlock(
+                self.enc[f"{res}x{res}_down"] = UNetBlock( # here
                     rngs=rngs,
                     in_channels=cout,
                     out_channels=cout,

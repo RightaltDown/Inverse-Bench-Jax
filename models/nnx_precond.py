@@ -32,6 +32,7 @@ class EDMPrecondConfig:
     attn_resolutions: list[int] = dataclasses.field(default_factory=lambda: [16])
     num_blocks: int = 1
     dropout: float = 0.0
+    
 
     def replace(self, **kwargs):
         return dataclasses.replace(self, **kwargs)
@@ -59,6 +60,7 @@ class EDMPrecond(nnx.Module):
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         self.sigma_data = sigma_data
+        
 
         self.model = _model_dict[model_type](
             rngs=rngs,
@@ -70,16 +72,10 @@ class EDMPrecond(nnx.Module):
         )
 
     # train is usually False?
-    def __call__(
-        self,
-        x,
-        sigma,
-        class_labels=None,
-        train=True,
-        **model_kwargs,
-    ):
+    def __call__(self, x, sigma, class_labels=None, train=True, **model_kwargs):
+        x = jnp.asarray(x, dtype=jnp.float32)
         sigma = jnp.asarray(sigma, dtype=jnp.float32).reshape(-1, 1, 1, 1)
-
+        dtype = jnp.float16 if self.use_fp16 else jnp.float32
         if self.label_dim == 0:
             class_labels = None
         elif class_labels is None:
@@ -89,33 +85,18 @@ class EDMPrecond(nnx.Module):
                 -1, self.label_dim
             )
 
-        # Calculate conditioning parameters (now with broadcasted sigma)
-        c_skip = jnp.divide(
-            jnp.square(self.sigma_data), jnp.square(sigma) + jnp.square(self.sigma_data)
-        )
-        c_out = jnp.divide(
-            jnp.multiply(sigma, self.sigma_data),
-            jnp.sqrt(jnp.square(sigma) + jnp.square(self.sigma_data)),
-        )
-        c_in = jnp.divide(1, jnp.sqrt(jnp.square(self.sigma_data) + jnp.square(sigma)))
-        c_noise = jnp.divide(jnp.log(sigma), 4)
+        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
+        c_out = jnp.sqrt(sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2))
+        c_in = 1 / jnp.sqrt(self.sigma_data ** 2 + sigma ** 2)
+        c_noise = jnp.log(sigma) / 4
 
-        x_scaled = jnp.multiply(c_in, x)
-
-        # Model call (flatten c_noise for the UNet)
-        F_x = self.model(
-            x_scaled,
-            jnp.ravel(c_noise),
-            class_labels=class_labels,
-            train=train,
-            **model_kwargs,
-        )
-        D_x = jnp.add(jnp.multiply(c_skip, x), jnp.multiply(c_out, F_x))
+        F_x = self.model(jnp.asarray(c_in * x, dtype=dtype), c_noise.flatten(), class_labels=class_labels, train=train, **model_kwargs)
+        assert F_x.dtype == dtype
+        D_x = c_skip * x + c_out * F_x.astype(jnp.float32)
         return D_x
 
     def round_sigma(self, sigma):
-        """Convert sigma to the appropriate format."""
-        return jnp.asarray(sigma)
+        return jnp.asarray(sigma, dtype=jnp.float32)
 
 
 _precond_dict = {"edm": EDMPrecond}

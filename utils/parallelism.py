@@ -24,7 +24,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.experimental import mesh_utils
 from models.nnx_precond import EDMPrecond, EDMPrecondConfig
-import configs.pretrain.navier_stokes as default
+import configs.default as default
 
 from flax import nnx
 from flax.training import train_state
@@ -35,8 +35,16 @@ Shape = tuple[int, ...]
 
 class TrainState(train_state.TrainState):
     graphdef: nnx.GraphDef[EDMPrecond]
-    rng_key: jax.Array
+    rng: jax.Array
     # ema_params: Optional[nnx.State] = None
+    
+    def apply_gradients(self, *args, **kwargs):
+        
+        new_state = super().apply_gradients(*args, **kwargs)
+        
+        _, next_rng = jax.random.split(self.rng)
+        
+        return new_state.replace(rng=next_rng)
 
 
 @runtime_checkable
@@ -127,11 +135,18 @@ def _to_array(x):
     return x
 
 
+# def _to_array(x):
+#     # Only attempt conversion if the input is *not* already a JAX array
+#     if isinstance(x, jax.Array):
+#         return jnp.asarray(x)
+#     return x
+
+
 def setup_initial_state(
     constructor: Callable[[EDMPrecondConfig, jax.Array], EDMPrecond],
     tx,
     config: EDMPrecondConfig,
-    rng: jax.Array,
+    rngs: nnx.Rngs,
     mesh: jax.sharding.Mesh,
 ) -> tuple[TrainState, TrainState]:
     """We initialize the model and optimizer state, and optionally load from a
@@ -152,8 +167,7 @@ def setup_initial_state(
     # Initialization
 
     with mesh:
-        key = jax.random.PRNGKey(config.seed)
-        model = constructor(config, key)
+        model = constructor(config, rngs)
         graphdef, params = nnx.split(model, nnx.Param)
         ema_params = jax.tree.map(lambda x: jnp.array(x), params)
 
@@ -163,15 +177,12 @@ def setup_initial_state(
             tx=tx,
             graphdef=graphdef,
             # ema_params=ema_params,
-            rng_key=key,
+            rng=rngs.state(),
         )
         state = jax.tree.map(_to_array, state)
-        # TODO: not used for now, useful for FSDP training (model parallelism)
-        # useful for automatic partiioning of specs based on model structure
-        # good for sharding model, use in conjuction with jax.lax.with_sharding_constraint
-        # state_spec = nnx.get_partition_spec(state)
-        # state = jax.lax.with_sharding_constraint(state, state_spec)
-        replicated_spec = jax.tree.map(lambda _: P(), state)
-
+        state_spec = nnx.get_partition_spec(state)
+        state = jax.lax.with_sharding_constraint(state, state_spec)
+        
     state_sharding = nnx.get_named_sharding(state, mesh)
+
     return state, state_sharding

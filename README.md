@@ -25,14 +25,14 @@ pip install -U "jax[cuda12]"
 Install Flax + dependencies:
 
 ```
-pip install -r requirements.txt
+pip install -r requirements.txtYoussef Marzouk  
 ```
 or for conda env:
 
 ```
-conda env create -f enviroment.yml
+conda env create -f environment.yml
 ```
-`enviroment_full.yml` contains all the conda packages if there are still missing packages when running with `enviroment.yml`.  \
+`environment_full.yml` contains all the conda packages if there are still missing packages when running with `environment.yml`.  \
 
 And finally start the training:
 

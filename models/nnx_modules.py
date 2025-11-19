@@ -5,50 +5,24 @@ import jax.numpy as jnp
 
 
 def weight_init(key, shape, mode, fan_in, fan_out):
-    if mode == "xavier_uniform":
-        return np.sqrt(6 / (fan_in + fan_out)) * (
-            jax.random.uniform(key, shape) * 2 - 1
-        )
-    if mode == "xavier_normal":
-        return np.sqrt(2 / (fan_in + fan_out)) * jax.random.normal(key, shape)
-    if mode == "kaiming_uniform":
-        return np.sqrt(3 / fan_in) * (jax.random.uniform(key, shape) * 2 - 1)
-    if mode == "kaiming_normal":
-        return np.sqrt(1 / fan_in) * jax.random.normal(key, shape)
-    if mode == "test":
-        return jnp.ones(shape)
+    if mode == "xavier_uniform": return np.sqrt(6 / (fan_in + fan_out)) * (jax.random.uniform(key, shape) * 2 - 1)
+    if mode == "xavier_normal": return np.sqrt(2 / (fan_in + fan_out)) * jax.random.normal(key, shape)
+    if mode == "kaiming_uniform": return np.sqrt(3 / fan_in) * (jax.random.uniform(key, shape) * 2 - 1)
+    if mode == "kaiming_normal": return np.sqrt(1 / fan_in) * jax.random.normal(key, shape)
     raise ValueError(f'Invalid init mode "{mode}"')
 
 
 class Linear(nnx.Module):
-    def __init__(
-        self,
-        rngs,
-        in_features,
-        out_features,
-        bias=True,
-        init_mode="test",
-        init_weight=1,
-        init_bias=0,
-    ):
+    def __init__(self, in_features, out_features, bias=True, init_mode="kaiming_normal", init_weight=1, init_bias=0, *, rngs: nnx.Rngs):
         super().__init__()
-
         self.in_features = in_features
         self.out_features = out_features
 
         # Split RNG key for weight and bias
         kernel_key, bias_key = jax.random.split(rngs.params())
-
         init_kwargs = dict(mode=init_mode, fan_in=in_features, fan_out=out_features)
-        self.weight = nnx.Param(
-            weight_init(kernel_key, [out_features, in_features], **init_kwargs)
-            * init_weight
-        )
-        self.bias = (
-            nnx.Param(weight_init(bias_key, [out_features], **init_kwargs) * init_bias)
-            if bias
-            else None
-        )
+        self.weight = nnx.Param(weight_init(kernel_key, [out_features, in_features], **init_kwargs) * init_weight)
+        self.bias = nnx.Param(weight_init(bias_key, [out_features], **init_kwargs) * init_bias) if bias else None
 
     def __call__(self, x):
         x = x @ self.weight.value.T
@@ -60,23 +34,11 @@ class Linear(nnx.Module):
 class Conv2d(nnx.Module):
     """2D convolution layer with optional up/downsampling."""
 
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        kernel,
-        bias=True,
-        up=False,
-        down=False,
-        resample_filter=[1, 1],
-        fused_resample=False,
-        init_mode="kaiming_normal",
-        init_weight=1,
-        init_bias=0,
-        *,
-        rngs: nnx.Rngs,
-    ):
-        assert not (up and down), "Cannot upsample and downsample simultaneously"
+    def __init__( self,
+        in_channels, out_channels, kernel, bias=True, up=False, down=False,
+        resample_filter=[1, 1], fused_resample=False, init_mode="kaiming_normal", init_weight=1,init_bias=0,
+        *, rngs: nnx.Rngs):
+        assert not (up and down)
         super().__init__()
 
         self.in_channels = in_channels
@@ -84,40 +46,14 @@ class Conv2d(nnx.Module):
         self.up = up
         self.down = down
         self.fused_resample = fused_resample
+        
+        weight_key, bias_key = jax.random.split(rngs.params())
 
-        # Split RNG key for weight and bias if needed
-        if kernel:
-            if bias:
-                weight_key, bias_key = jax.random.split(rngs.params())
-            else:
-                weight_key = rngs.params()
+        init_kwargs = dict(mode=init_mode, fan_in=in_channels*kernel*kernel,fan_out=out_channels*kernel*kernel)
+        self.weight = nnx.Param(weight_init(weight_key, [kernel, kernel, in_channels, out_channels], **init_kwargs) * init_weight) if kernel else None
+        self.bias = nnx.Param(weight_init(bias_key, [out_channels], **init_kwargs) * init_bias) if kernel and bias else None
 
-            init_kwargs = dict(
-                mode=init_mode,
-                fan_in=in_channels * kernel * kernel,
-                fan_out=out_channels * kernel * kernel,
-            )
 
-            # Create weight in HWIO format
-            self.weight = nnx.Param(
-                weight_init(
-                    weight_key,
-                    [kernel, kernel, in_channels, out_channels],
-                    **init_kwargs,
-                )
-                * init_weight
-            )
-            if bias:
-                self.bias = nnx.Param(
-                    weight_init(bias_key, [out_channels], **init_kwargs) * init_bias
-                )
-            else:
-                self.bias = None
-        else:
-            self.weight = None
-            self.bias = None
-
-        # Create resample filter in HWIO format
         if up or down:
             f = jnp.array(resample_filter, dtype=jnp.float32)
             f_outer = jnp.outer(f, f)
@@ -132,25 +68,12 @@ class Conv2d(nnx.Module):
         # Get parameters
         w = self.weight.value.astype(x.dtype) if self.weight is not None else None
         b = self.bias.value.astype(x.dtype) if self.bias is not None else None
-        f = (
-            self.resample_filter.value.astype(x.dtype)
-            if self.resample_filter is not None
-            else None
-        )
-
-        # Calculate padding
-        # w_pad = w.shape[-1] // 2 if w is not None else 0
-        # f_pad = (f.shape[-1] - 1) // 2 if f is not None else 0
-        w_pad = (
-            w.shape[0] // 2 if w is not None else 0
-        )  # Using first dimension for HWIO format
+        f = self.resample_filter.value.astype(x.dtype) if self.resample_filter is not None else None       
+       
+        w_pad = w.shape[0] // 2 if w is not None else 0  # Using first dimension for HWIO format
         f_pad = (f.shape[0] - 1) // 2 if f is not None else 0
 
-        # Handle different convolution cases
         if self.fused_resample and self.up and w is not None:
-            # Fused upsampling + convolution
-            # print("Fused upsampling + convolution")
-            # f_up = jnp.tile(f * 4, (self.in_channels, 1, 1, 1))
             f_up = jnp.tile(f * 4, (1, 1, 1, self.in_channels))  # HWIO format
             x = jax.lax.conv_general_dilated(
                 x,
@@ -171,8 +94,6 @@ class Conv2d(nnx.Module):
             )
 
         elif self.fused_resample and self.down and w is not None:
-            # Fused convolution + downsampling
-            # print("Fused convolution + downsampling")
             x = jax.lax.conv_general_dilated(
                 x,
                 w,
@@ -180,10 +101,7 @@ class Conv2d(nnx.Module):
                 padding=[(w_pad + f_pad, w_pad + f_pad)] * 2,
                 dimension_numbers=("NHWC", "HWIO", "NHWC"),
             )
-            # f_down = jnp.tile(f, (self.out_channels, 1, 1, 1))
-            f_down = jnp.tile(
-                f, (1, 1, 1, self.out_channels)
-            )  # [H, W, out_channels, 1]
+            f_down = jnp.tile(f, (1, 1, 1, self.out_channels))  # [H, W, out_channels, 1]
             x = jax.lax.conv_general_dilated(
                 x,
                 f_down,
@@ -194,11 +112,7 @@ class Conv2d(nnx.Module):
             )
 
         else:
-            # Handle separate operations
-            # print("Handle separate operations")
             if self.up:
-                # print("self.up")
-                # f_up = jnp.tile(f * 4, (self.in_channels, 1, 1, 1))
                 f_up = jnp.tile(f * 4, (1, 1, 1, self.in_channels))  # HWIO format
                 x = jax.lax.conv_general_dilated(
                     x,
@@ -212,8 +126,6 @@ class Conv2d(nnx.Module):
                 )
 
             if self.down:
-                # print("self.down")
-                # f_down = jnp.tile(f, (self.in_channels, 1, 1, 1))
                 f_down = jnp.tile(f, (1, 1, 1, self.in_channels))  # HWIO format
                 x = jax.lax.conv_general_dilated(
                     x,
@@ -225,7 +137,6 @@ class Conv2d(nnx.Module):
                 )
 
             if w is not None:
-                # print("w")
                 x = jax.lax.conv_general_dilated(
                     x,
                     w,
@@ -275,54 +186,24 @@ class GroupNorm(nnx.Module):
 
 
 class UNetBlock(nnx.Module):
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        emb_channels,
-        up=False,
-        down=False,
-        attention=False,
-        num_heads=None,
-        channels_per_head=64,
-        dropout=0,
-        skip_scale=1,
-        eps=1e-5,
-        resample_filter=[1, 1],
-        resample_proj=False,
-        adaptive_scale=True,
-        init=dict(),
-        init_zero=dict(init_weight=0),
-        init_attn=None,
-        *,
-        rngs: nnx.Rngs,
+    def __init__( self,
+        in_channels, out_channels, emb_channels, up=False, down=False, attention=False,
+        num_heads=None, channels_per_head=64, dropout=0, skip_scale=1,
+        eps=1e-5, resample_filter=[1, 1], resample_proj=False, adaptive_scale=True,
+        init=dict(), init_zero=dict(init_weight=0),init_attn=None,
+        *, rngs: nnx.Rngs,
     ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.emb_channels = emb_channels
-        self.num_heads = (
-            0
-            if not attention
-            else num_heads
-            if num_heads is not None
-            else out_channels // channels_per_head
-        )
+        self.num_heads = 0 if not attention else num_heads if num_heads is not None else out_channels // channels_per_head
         self.dropout = dropout
         self.skip_scale = skip_scale
         self.adaptive_scale = adaptive_scale
 
         self.norm0 = GroupNorm(rngs=rngs, num_channels=in_channels, eps=eps)
-        self.conv0 = Conv2d(
-            rngs=rngs,
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel=3,
-            up=up,
-            down=down,
-            resample_filter=resample_filter,
-            **init,
-        )
+        self.conv0 = Conv2d(rngs=rngs, in_channels=in_channels, out_channels=out_channels, kernel=3, up=up, down=down, resample_filter=resample_filter, **init)
         self.affine = Linear(
             rngs=rngs,
             in_features=emb_channels,

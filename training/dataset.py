@@ -15,22 +15,22 @@ from pathlib import Path
 from PIL import Image
 
 
-def create_mnist_dataset(batch_size, split="train", shuffle=True):
-    ds = tfds.load("mnist", split=split, as_supervised=True)
+# def create_mnist_dataset(batch_size, split="train", shuffle=True):
+#     ds = tfds.load("mnist", split=split, as_supervised=True)
 
-    def preprocess(image, label):
-        image = tf.cast(image, tf.float32) / 255.0
-        image = image * 2.0 - 1.0
-        return image
+#     def preprocess(image, label):
+#         image = tf.cast(image, tf.float32) / 255.0
+#         image = image * 2.0 - 1.0
+#         return image
 
-    ds = ds.map(preprocess)
+#     ds = ds.map(preprocess)
 
-    if shuffle:
-        ds = ds.shuffle(10000)
+#     if shuffle:
+#         ds = ds.shuffle(10000)
 
-    ds = ds.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+#     ds = ds.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 
-    return tfds.as_numpy(ds)
+#     return tfds.as_numpy(ds)
 
 
 class ImageFolder(Dataset):

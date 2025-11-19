@@ -119,11 +119,11 @@ def edm_loss_fn(
     sigma_data=0.5,
     P_mean=-1.2,
     P_std=1.2,
-    rngs: nnx.Rngs = None,
+    rngs: jax.Array = None,
     labels=None,
     augment_pipe=None,
 ):
-    rng_sigma, rng_noise = jax.random.split(rngs.loss())
+    rngs, rng_sigma, rng_noise = jax.random.split(rngs, 3)
     rnd_normal = jax.random.normal(rng_sigma, (images.shape[0], 1, 1, 1))
     sigma = jnp.exp(rnd_normal * P_std + P_mean)
     weight = (sigma**2 + sigma_data**2) / (sigma * sigma_data) ** 2
@@ -138,7 +138,7 @@ def edm_loss_fn(
     noised_input = y + noise * sigma
 
     # Get denoised prediction from model
-    D_yn = model(noised_input, sigma, labels, augment_labels=augment_labels, rngs=rngs)
+    D_yn = model(noised_input, sigma, labels, augment_labels=augment_labels)
 
     # Calculate MSE loss with importance weighting
     mse = (D_yn - y) ** 2

@@ -53,7 +53,9 @@ class Config:
     per_device_batch_size: int = 4
 
     warmup_steps: int = 1000
-    base_lr: float = 1e-4
+    base_lr: float = 1e-5
+    
+    num_train_workers: int = 4
 
 
 # @dataclasses.dataclass(unsafe_hash=True)
